@@ -7,8 +7,7 @@ namespace robot_qt_viewer
     PaintingAnalysisMeshData PaintingAnalysisMeshAdapter::build(
         const assetcore::ModelDesc& model,
         const std::string& name,
-        const std::string& sourcePath,
-        const Eigen::Isometry3d& worldFromModel)
+        const std::string& sourcePath)
     {
         PaintingAnalysisMeshData data;
         data.workpiece.name = name;
@@ -20,72 +19,19 @@ namespace robot_qt_viewer
             const assetcore::GeometryDesc& geometry = model.subMesh(subMeshIndex).geometry;
             std::vector<std::size_t>& bindings = data.binding.sampleIndicesBySubMesh[subMeshIndex];
             bindings.reserve(geometry.positions.size());
-            const std::size_t sampleOffset = data.workpiece.samples.size();
             for(std::size_t vertexIndex = 0; vertexIndex < geometry.positions.size(); ++vertexIndex) {
                 sprayworkpiece::SurfaceSample sample;
-                const glm::vec4 localPosition = model.get_local() * glm::vec4(
-                    geometry.positions[vertexIndex].x(),
-                    geometry.positions[vertexIndex].y(),
-                    geometry.positions[vertexIndex].z(),
-                    1.0f);
-                const Eigen::Vector3d modelPosition(
-                    static_cast<double>(localPosition.x),
-                    static_cast<double>(localPosition.y),
-                    static_cast<double>(localPosition.z));
-                sample.position = worldFromModel * modelPosition;
+                sample.position = geometry.positions[vertexIndex].cast<double>();
                 if(vertexIndex < geometry.normals.size() &&
                     geometry.normals[vertexIndex].allFinite() &&
                     geometry.normals[vertexIndex].norm() > 1.0e-12f) {
-                    const glm::vec4 localNormal = model.get_local() * glm::vec4(
-                        geometry.normals[vertexIndex].x(),
-                        geometry.normals[vertexIndex].y(),
-                        geometry.normals[vertexIndex].z(),
-                        0.0f);
-                    const Eigen::Vector3d modelNormal(
-                        static_cast<double>(localNormal.x),
-                        static_cast<double>(localNormal.y),
-                        static_cast<double>(localNormal.z));
-                    sample.normal = (worldFromModel.linear() * modelNormal).normalized();
+                    sample.normal = geometry.normals[vertexIndex].cast<double>().normalized();
                 } else {
                     sample.normal = Eigen::Vector3d::UnitZ();
                     usedFallbackNormal = true;
                 }
                 bindings.push_back(data.workpiece.samples.size());
                 data.workpiece.addSample(sample);
-            }
-
-            if(!geometry.indices.empty()) {
-                const std::size_t triangleIndexCount = geometry.indices.size() -
-                    geometry.indices.size() % 3;
-                for(std::size_t indexOffset = 0;
-                    indexOffset < triangleIndexCount;
-                    indexOffset += 3) {
-                    const std::uint32_t i0 = geometry.indices[indexOffset];
-                    const std::uint32_t i1 = geometry.indices[indexOffset + 1];
-                    const std::uint32_t i2 = geometry.indices[indexOffset + 2];
-                    if(i0 >= geometry.positions.size() ||
-                        i1 >= geometry.positions.size() ||
-                        i2 >= geometry.positions.size()) {
-                        data.warnings.push_back("Ignored an out-of-range mesh triangle index.");
-                        continue;
-                    }
-                    data.workpiece.triangleIndices.push_back(
-                        static_cast<std::uint32_t>(sampleOffset + i0));
-                    data.workpiece.triangleIndices.push_back(
-                        static_cast<std::uint32_t>(sampleOffset + i1));
-                    data.workpiece.triangleIndices.push_back(
-                        static_cast<std::uint32_t>(sampleOffset + i2));
-                }
-                if(triangleIndexCount != geometry.indices.size()) {
-                    data.warnings.push_back("Ignored incomplete mesh triangle indices.");
-                }
-            } else if(geometry.positions.size() % 3 == 0) {
-                for(std::size_t index = 0; index < geometry.positions.size(); ++index) {
-                    data.workpiece.triangleIndices.push_back(
-                        static_cast<std::uint32_t>(sampleOffset + index));
-                }
-            } else {
-                data.warnings.push_back("A submesh had no triangle index buffer.");
             }
         }
         if(usedFallbackNormal) {

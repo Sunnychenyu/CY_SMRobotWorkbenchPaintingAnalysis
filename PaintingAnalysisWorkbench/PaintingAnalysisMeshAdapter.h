@@ -7,7 +7,6 @@
 #include <AssetCore/ModelDesc.h>
 
 #include <cstddef>
-#include <Eigen/Geometry>
 #include <string>
 #include <vector>
 
@@ -31,8 +30,7 @@ namespace robot_qt_viewer
         static PaintingAnalysisMeshData build(
             const assetcore::ModelDesc& model,
             const std::string& name,
-            const std::string& sourcePath,
-            const Eigen::Isometry3d& worldFromModel = Eigen::Isometry3d::Identity());
+            const std::string& sourcePath);
 
         static smrobot::visualization::SurfaceScalarOverlay makeOverlay(
             const std::string& objectId,

@@ -4,32 +4,16 @@ set(TARGET_NAME PaintingAnalysisWorkbench)
 set(CMAKE_AUTOMOC ON)
 
 set(SOURCES
-    CoatingAnalysisInfoPanel.cpp
-    CoatingAnalysisInfoPanel.h
-    AxisymmetricProfileSelectionDialog.cpp
-    AxisymmetricProfileSelectionDialog.h
     CoatingAnalysisModuleController.cpp
     CoatingAnalysisModuleController.h
     CoatingAnalysisPanel.cpp
     CoatingAnalysisPanel.h
     CoatingAnalysisSession.h
-    CoatingAnalysisTreeModel.cpp
-    CoatingAnalysisTreeModel.h
-    CoatingAnalysisTreePanel.cpp
-    CoatingAnalysisTreePanel.h
     CoatingAnalysisViewModel.h
-    CoatingAnalysisVisibilityBar.cpp
-    CoatingAnalysisVisibilityBar.h
-    CoatingAnalysisWaypointDialog.cpp
-    CoatingAnalysisWaypointDialog.h
-    DepositionCurveWidget.cpp
-    DepositionCurveWidget.h
     PaintingAnalysisDialogService.cpp
     PaintingAnalysisDialogService.h
     PaintingAnalysisMeshAdapter.cpp
     PaintingAnalysisMeshAdapter.h
-    ThicknessPredictionJobController.cpp
-    ThicknessPredictionJobController.h
     ThicknessLegendWidget.cpp
     ThicknessLegendWidget.h
 )
@@ -49,14 +33,9 @@ target_link_libraries(${TARGET_NAME}
         SMRobotPlatform::AssetCore
         SMRobotPlatform::VisualizationSDK
         SMRobotSpray::SprayThicknessPrediction
-        SMRobotSpray::SprayTrajectoryCore
     PRIVATE
-        Qt5::Gui
         Qt5::Widgets
-        Common::CustomLog
-        Common::GLRuntime
         SMRobotPlatform::SimulationProject
-        SMRobotSpray::SprayThicknessPredictionOpenGL
 )
 
 target_compile_features(${TARGET_NAME} PUBLIC cxx_std_17)
@@ -79,7 +58,6 @@ if(ExportPacakge${PACKAGE_NAME})
         SMRobotPlatform::AssetCore
         SMRobotPlatform::VisualizationSDK
         SMRobotSpray::SprayThicknessPrediction
-        SMRobotSpray::SprayTrajectoryCore
     )
     set(${TARGET_NAME}_INSTALL_HEADER_STAGING_DIR ${CMAKE_CURRENT_BINARY_DIR}/install_headers)
     file(REMOVE_RECURSE ${${TARGET_NAME}_INSTALL_HEADER_STAGING_DIR})

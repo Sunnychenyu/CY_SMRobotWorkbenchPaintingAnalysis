@@ -10,10 +10,5 @@ namespace robot_qt_viewer
     {
     public:
         static QString selectModelFile(QWidget* parent);
-        static bool selectModelUnitScale(
-            QWidget* parent,
-            const QString& modelPath,
-            double& scaleToMeters);
-        static QString selectTrajectoryFile(QWidget* parent);
     };
 }

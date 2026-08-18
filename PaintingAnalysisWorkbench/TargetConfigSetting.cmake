@@ -5,14 +5,9 @@ set(${TARGET_NAME}_RequiredLibsPublic
     SMRobotPlatform::AssetCore
     SMRobotPlatform::VisualizationSDK
     SMRobotSpray::SprayThicknessPrediction
-    SMRobotSpray::SprayTrajectoryCore
 )
 
 set(${TARGET_NAME}_RequiredLibsPrivate
-    Qt5::Gui
     Qt5::Widgets
-    Common::CustomLog
-    Common::GLRuntime
     SMRobotPlatform::SimulationProject
-    SMRobotSpray::SprayThicknessPredictionOpenGL
 )

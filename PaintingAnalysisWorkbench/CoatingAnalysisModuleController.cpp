@@ -1,13 +1,9 @@
 #include "CoatingAnalysisModuleController.h"
 
-#include "CoatingAnalysisInfoPanel.h"
 #include "CoatingAnalysisPanel.h"
-#include "CoatingAnalysisTreePanel.h"
-#include "CoatingAnalysisVisibilityBar.h"
-#include "CoatingAnalysisWaypointDialog.h"
-#include "AxisymmetricProfileSelectionDialog.h"
+#include "CoatingAnalysisViewModel.h"
+#include "PaintingAnalysisDialogService.h"
 #include "PaintingAnalysisMeshAdapter.h"
-#include "ThicknessPredictionJobController.h"
 
 #include "RobotQtViewerDocumentContext.h"
 #include "RobotQtViewerDocumentController.h"
@@ -18,36 +14,16 @@
 #include "ViewportReloadWorkflowController.h"
 
 #include <AssetCore/AssetManager.h>
-#include <CustomLog/CustomLog.h>
-#include <SprayThicknessPrediction/RotationalSurfaceFitter.h>
-#include <SprayThicknessPredictionOpenGL/PeriodicSectorReduction.h>
-#include <SprayThicknessPredictionOpenGL/AxisymmetricProfileReduction.h>
 #include <SimulationProject/AssetResolver.h>
 #include <SimulationProject/ProjectSession.h>
 #include <SimulationProject/RuntimePaths.h>
-#include <SprayTrajectoryCore/LegacySprayTrajectoryIo.h>
+#include <SprayThicknessPrediction/DemoThicknessPrediction.h>
 
-#include <Eigen/Geometry>
-
-#include <algorithm>
-#include <cmath>
 #include <filesystem>
-#include <limits>
-#include <numeric>
 
 namespace
 {
     constexpr double kMetersToMicrometers = 1.0e6;
-    const QString kFixedModelPath = QStringLiteral(
-        "K:/rs2026/data/ThickPredictData/STL/libing/yangjian_2_0.02.STL");
-    const QString kFixedTrajectoryPath = QStringLiteral(
-        "K:/rs2026/data/ThickPredictData/PointData/libing_pointdata/MergedTrajectory_0_0.txt");
-
-    double elapsedMilliseconds(const std::chrono::steady_clock::time_point& start)
-    {
-        return std::chrono::duration<double, std::milli>(
-            std::chrono::steady_clock::now() - start).count();
-    }
 
     const simulation_project::SceneObjectDesc* findObject(
         const simulation_project::ProjectDocument& document,
@@ -79,481 +55,30 @@ namespace
         context.assetSearchPaths = session.document().assetSearchPaths;
         return context;
     }
-
-    std::filesystem::path normalizedPath(const std::filesystem::path& path)
-    {
-        std::error_code error;
-        std::filesystem::path normalized = std::filesystem::weakly_canonical(path, error);
-        if(error) {
-            normalized = std::filesystem::absolute(path, error);
-        }
-        return (error ? path : normalized).lexically_normal();
-    }
-
-    Eigen::Isometry3d makeTransform(const simulation_project::TransformDesc& desc)
-    {
-        Eigen::Isometry3d transform = Eigen::Isometry3d::Identity();
-        transform.translation() = Eigen::Vector3d(desc.x, desc.y, desc.z);
-        transform.linear() =
-            Eigen::AngleAxisd(desc.yaw, Eigen::Vector3d::UnitZ()).toRotationMatrix() *
-            Eigen::AngleAxisd(desc.pitch, Eigen::Vector3d::UnitY()).toRotationMatrix() *
-            Eigen::AngleAxisd(desc.roll, Eigen::Vector3d::UnitX()).toRotationMatrix();
-        return transform;
-    }
-
-    robot_qt_viewer::CoatingAnalysisModelInfo makeModelInfo(
-        const assetcore::ModelDesc& model,
-        const Eigen::Isometry3d& worldFromModel)
-    {
-        robot_qt_viewer::CoatingAnalysisModelInfo info;
-        info.subMeshCount = model.subMeshCount();
-        Eigen::Vector3d minimum = Eigen::Vector3d::Constant(
-            std::numeric_limits<double>::max());
-        Eigen::Vector3d maximum = Eigen::Vector3d::Constant(
-            std::numeric_limits<double>::lowest());
-
-        for(const assetcore::SubMeshDesc& subMesh : model.subMeshes()) {
-            const assetcore::GeometryDesc& geometry = subMesh.geometry;
-            info.vertexCount += geometry.positions.size();
-            for(const Eigen::Vector3f& position : geometry.positions) {
-                const Eigen::Vector3d worldPosition =
-                    worldFromModel * position.cast<double>();
-                minimum = minimum.cwiseMin(worldPosition);
-                maximum = maximum.cwiseMax(worldPosition);
-            }
-
-            if(!geometry.indices.empty()) {
-                for(std::size_t offset = 0; offset + 2 < geometry.indices.size(); offset += 3) {
-                    if(geometry.indices[offset] < geometry.positions.size() &&
-                        geometry.indices[offset + 1] < geometry.positions.size() &&
-                        geometry.indices[offset + 2] < geometry.positions.size()) {
-                        ++info.triangleCount;
-                    }
-                }
-            } else {
-                info.triangleCount += geometry.positions.size() / 3;
-            }
-        }
-
-        info.valid = info.vertexCount > 0;
-        if(info.valid) {
-            const Eigen::Vector3d size = maximum - minimum;
-            info.sizeXMeters = size.x();
-            info.sizeYMeters = size.y();
-            info.sizeZMeters = size.z();
-        }
-        return info;
-    }
-
-    robot_qt_viewer::CoatingAnalysisTrajectoryInfo makeTrajectoryInfo(
-        const spraytrajectory::SprayTrajectory& trajectory,
-        std::size_t warningCount)
-    {
-        robot_qt_viewer::CoatingAnalysisTrajectoryInfo info;
-        info.warningCount = warningCount;
-        const std::vector<spraytrajectory::SprayPathPoint> points =
-            trajectory.flattenedPoints();
-        info.pointCount = points.size();
-        if(points.empty()) {
-            return info;
-        }
-
-        Eigen::Vector3d minimum = points.front().tcpPose.translation();
-        Eigen::Vector3d maximum = minimum;
-        for(std::size_t index = 1; index < points.size(); ++index) {
-            const Eigen::Vector3d position = points[index].tcpPose.translation();
-            minimum = minimum.cwiseMin(position);
-            maximum = maximum.cwiseMax(position);
-            info.pathLengthMeters +=
-                (position - points[index - 1].tcpPose.translation()).norm();
-        }
-
-        info.startTimeSeconds = points.front().time;
-        info.endTimeSeconds = points.back().time;
-        info.durationSeconds = std::max(0.0,
-            info.endTimeSeconds - info.startTimeSeconds);
-        info.averageSpeedMetersPerSecond = info.durationSeconds > 0.0
-            ? info.pathLengthMeters / info.durationSeconds
-            : 0.0;
-        const Eigen::Vector3d range = maximum - minimum;
-        info.rangeXMeters = range.x();
-        info.rangeYMeters = range.y();
-        info.rangeZMeters = range.z();
-        info.valid = true;
-        return info;
-    }
-
-    robot_qt_viewer::CoatingPredictionDebugTriangle makeDebugTriangle(
-        const sprayworkpiece::WorkpieceModel& workpiece,
-        std::size_t triangleIndex)
-    {
-        robot_qt_viewer::CoatingPredictionDebugTriangle result;
-        const std::size_t offset = triangleIndex * 3;
-        if(offset + 2 >= workpiece.triangleIndices.size()) {
-            return result;
-        }
-        const std::uint32_t indices[3] = {
-            workpiece.triangleIndices[offset],
-            workpiece.triangleIndices[offset + 1],
-            workpiece.triangleIndices[offset + 2]};
-        if(indices[0] >= workpiece.samples.size() ||
-            indices[1] >= workpiece.samples.size() ||
-            indices[2] >= workpiece.samples.size()) {
-            return result;
-        }
-        const Eigen::Vector3d positions[3] = {
-            workpiece.samples[indices[0]].position,
-            workpiece.samples[indices[1]].position,
-            workpiece.samples[indices[2]].position};
-        result.ax = positions[0].x();
-        result.ay = positions[0].y();
-        result.az = positions[0].z();
-        result.bx = positions[1].x();
-        result.by = positions[1].y();
-        result.bz = positions[1].z();
-        result.cx = positions[2].x();
-        result.cy = positions[2].y();
-        result.cz = positions[2].z();
-        return result;
-    }
-
-    robot_qt_viewer::CoatingPredictionDebugState makeSeedDebugState(
-        const robot_qt_viewer::PaintingAnalysisMeshData& mesh,
-        std::size_t triangleIndex)
-    {
-        robot_qt_viewer::CoatingPredictionDebugState state;
-        state.visible = true;
-        if(triangleIndex < mesh.workpiece.triangleIndices.size() / 3) {
-            state.seedTriangles.push_back(makeDebugTriangle(mesh.workpiece, triangleIndex));
-        }
-        return state;
-    }
-
-    void configureAxisDebugState(
-        robot_qt_viewer::CoatingPredictionDebugState& state,
-        const sprayworkpiece::WorkpieceModel& workpiece,
-        const Eigen::Vector3d& axisOrigin,
-        const Eigen::Vector3d& axisDirection)
-    {
-        state.axisOriginX = axisOrigin.x();
-        state.axisOriginY = axisOrigin.y();
-        state.axisOriginZ = axisOrigin.z();
-        state.axisDirectionX = axisDirection.x();
-        state.axisDirectionY = axisDirection.y();
-        state.axisDirectionZ = axisDirection.z();
-
-        Eigen::Vector3d minimum = Eigen::Vector3d::Constant(
-            std::numeric_limits<double>::max());
-        Eigen::Vector3d maximum = Eigen::Vector3d::Constant(
-            std::numeric_limits<double>::lowest());
-        for(const auto& sample : workpiece.samples) {
-            minimum = minimum.cwiseMin(sample.position);
-            maximum = maximum.cwiseMax(sample.position);
-        }
-        const double diagonal = (maximum - minimum).norm();
-        state.axisLength = std::max(0.02, diagonal * 0.75);
-        state.markerRadius = std::max(0.0005, diagonal * 0.006);
-    }
-
-    robot_qt_viewer::CoatingPredictionDebugState makeRotationFitDebugState(
-        const robot_qt_viewer::PaintingAnalysisMeshData& mesh,
-        const spraythickness::CylindricalSurfaceFitResult& fit)
-    {
-        robot_qt_viewer::CoatingPredictionDebugState state;
-        state.visible = true;
-        state.seedTriangles.push_back(makeDebugTriangle(mesh.workpiece, fit.seedTriangleIndex));
-        state.cylindricalTriangles.reserve(fit.selectedTriangleIndices.size());
-        for(const std::size_t triangleIndex : fit.selectedTriangleIndices) {
-            state.cylindricalTriangles.push_back(
-                makeDebugTriangle(mesh.workpiece, triangleIndex));
-        }
-        configureAxisDebugState(
-            state, mesh.workpiece, fit.axisOrigin, fit.axisDirection);
-        return state;
-    }
 }
 
 namespace robot_qt_viewer
 {
-    struct CoatingAnalysisModuleController::AxisymmetricProfileState
-    {
-        spraythickness::opengl::AxisymmetricProfileSlice slice;
-        spraythickness::opengl::AxisymmetricProfileSelection selection;
-        spraythickness::opengl::AxisymmetricProfileReduction reduction;
-        QString details;
-    };
-
     CoatingAnalysisModuleController::CoatingAnalysisModuleController(
         CoatingAnalysisPanel& panel,
-        CoatingAnalysisTreePanel& treePanel,
-        CoatingAnalysisInfoPanel& infoPanel,
-        CoatingAnalysisVisibilityBar& visibilityBar,
         RobotQtViewerDocumentContext& context,
         QObject* parent)
         : QObject(parent)
         , m_panel(panel)
-        , m_treePanel(treePanel)
-        , m_infoPanel(infoPanel)
-        , m_visibilityBar(visibilityBar)
         , m_context(context)
-        , m_predictionJob(std::make_unique<ThicknessPredictionJobController>())
-        , m_axisymmetricProfile(std::make_unique<AxisymmetricProfileState>())
     {
         connect(&m_panel, &CoatingAnalysisPanel::openModelRequested,
-            this, &CoatingAnalysisModuleController::openModelFromDialog);
-        connect(&m_panel, &CoatingAnalysisPanel::openTrajectoryRequested,
-            this, &CoatingAnalysisModuleController::openTrajectoryFromDialog);
+            this, &CoatingAnalysisModuleController::openModel);
         connect(&m_panel, &CoatingAnalysisPanel::predictionRequested,
             this, &CoatingAnalysisModuleController::predictThickness);
-        connect(&m_panel, &CoatingAnalysisPanel::cancelPredictionRequested,
-            this, &CoatingAnalysisModuleController::cancelPrediction);
-        connect(&m_panel, &CoatingAnalysisPanel::localInputPreviewRequested,
-            this, &CoatingAnalysisModuleController::previewLocalInputs);
-        connect(&m_panel, &CoatingAnalysisPanel::profileRegionSelectionRequested,
-            this, &CoatingAnalysisModuleController::selectAxisymmetricProfileRegion);
-        connect(&m_panel, &CoatingAnalysisPanel::axisymmetricProfileSampleCountChanged,
-            this, [this]() {
-                if(m_predictionJob->isRunning()
-                    || !m_panel.axisymmetricProfilePredictionEnabled()
-                    || !m_axisymmetricProfile->selection.enabled) {
-                    return;
-                }
-                rebuildAxisymmetricProfileReduction();
-            });
-        connect(&m_panel, &CoatingAnalysisPanel::localDebugVisibilityChanged,
-            this, &CoatingAnalysisModuleController::setLocalDebugVisibility);
-        connect(&m_panel, &CoatingAnalysisPanel::localPreviewParametersChanged,
-            this, [this]() {
-                if(m_predictionJob->isRunning()) {
-                    return;
-                }
-                if(m_session.hasResult) {
-                    if(RobotQtViewerViewportServices* services = m_context.viewportServices()) {
-                        services->setSurfaceScalarProbeEnabled(false, QString());
-                        services->clearSurfaceScalarOverlay(m_session.objectId);
-                    }
-                    m_session.clearResult();
-                    publishStateChanged();
-                }
-                if(!m_panel.rotationBasedPredictionEnabled()) {
-                    m_hasLocalPreview = false;
-                    m_localPreviewDetails.clear();
-                    clearAxisymmetricProfileSelection();
-                    if(RobotQtViewerViewportServices* services = m_context.viewportServices()) {
-                        services->clearCoatingPredictionDebugState();
-                    }
-                    applyModelVisibilityOverrides();
-                    refreshViewModel();
-                    return;
-                }
-                if(m_panel.axisymmetricProfilePredictionEnabled()) {
-                    clearAxisymmetricProfileSelection();
-                    applyModelVisibilityOverrides();
-                    if(ensurePreviewWorkpieceLoaded() && hasEffectiveRotationAxis()) {
-                        if(ensureAxisymmetricProfileSlice()) {
-                            updateAxisymmetricProfileDebugState();
-                            m_status = QStringLiteral(
-                                "Select a profile prediction region to prepare axisymmetric prediction.");
-                        }
-                    }
-                    refreshViewModel();
-                    return;
-                }
-                applyModelVisibilityOverrides();
-                if(ensurePreviewWorkpieceLoaded() && hasEffectiveRotationAxis()
-                    && !m_session.trajectory.empty()) {
-                    previewLocalInputs();
-                } else {
-                    refreshViewModel();
-                }
-            });
-        connect(&m_panel, &CoatingAnalysisPanel::spatialGridParametersChanged,
-            this, [this]() {
-                if(m_predictionJob->isRunning() || !m_session.hasResult) {
-                    return;
-                }
-                if(RobotQtViewerViewportServices* services = m_context.viewportServices()) {
-                    services->setSurfaceScalarProbeEnabled(false, QString());
-                    services->clearSurfaceScalarOverlay(m_session.objectId);
-                }
-                m_session.clearResult();
-                m_hasCurrentThickness = false;
-                m_status = QStringLiteral(
-                    "Spatial grid settings changed. Run prediction to apply them.");
-                refreshViewModel();
-                publishStateChanged();
-            });
-        connect(&m_panel, &CoatingAnalysisPanel::workpieceChanged,
-            this, &CoatingAnalysisModuleController::selectWorkpiece);
-        connect(&m_panel, &CoatingAnalysisPanel::rotationSurfacePickRequested,
-            this, [this]() {
-                if(RobotQtViewerViewportServices* services = m_context.viewportServices()) {
-                    services->beginRotationSurfacePick();
-                    m_status = QStringLiteral("Click a cylindrical side face in the viewport.");
-                    refreshViewModel();
-                }
-            });
-
-        connect(&m_treePanel, &CoatingAnalysisTreePanel::waypointInfoRequested,
-            this, &CoatingAnalysisModuleController::handleWaypointInfoRequested);
-        connect(&m_treePanel, &CoatingAnalysisTreePanel::modelVisibilityToggleRequested,
-            this, &CoatingAnalysisModuleController::handleModelVisibilityToggleRequested);
-        connect(&m_treePanel, &CoatingAnalysisTreePanel::modelSetAsWorkpiece,
-            this, &CoatingAnalysisModuleController::handleModelSetAsWorkpiece);
-        connect(&m_treePanel, &CoatingAnalysisTreePanel::thicknessClearRequested,
-            this, &CoatingAnalysisModuleController::handleThicknessClearRequested);
-
-        connect(&m_visibilityBar, &CoatingAnalysisVisibilityBar::showModelChanged,
-            this, &CoatingAnalysisModuleController::setShowModel);
-        connect(&m_visibilityBar, &CoatingAnalysisVisibilityBar::showSprayPointsChanged,
-            this, &CoatingAnalysisModuleController::setShowSprayPoints);
-        connect(&m_visibilityBar, &CoatingAnalysisVisibilityBar::showThicknessChanged,
+        connect(&m_panel, &CoatingAnalysisPanel::showThicknessChanged,
             this, &CoatingAnalysisModuleController::setShowThickness);
-        connect(&m_visibilityBar, &CoatingAnalysisVisibilityBar::thicknessPickChanged,
-            this, &CoatingAnalysisModuleController::setThicknessPickEnabled);
-
-        connect(m_predictionJob.get(), &ThicknessPredictionJobController::progressChanged,
-            this, &CoatingAnalysisModuleController::handlePredictionProgress);
-        connect(m_predictionJob.get(), &ThicknessPredictionJobController::predictionFinished,
-            this, &CoatingAnalysisModuleController::handlePredictionFinished);
-        connect(m_predictionJob.get(), &ThicknessPredictionJobController::predictionFailed,
-            this, &CoatingAnalysisModuleController::handlePredictionFailed);
-        connect(m_predictionJob.get(), &ThicknessPredictionJobController::runningChanged,
-            this, [this](bool running) {
-                if(RobotQtViewerViewportServices* services = m_context.viewportServices()) {
-                    services->setGpuPredictionBusy(running);
-                }
-                refreshViewModel();
-            });
         refreshViewModel();
-    }
-
-    bool CoatingAnalysisModuleController::ensurePreviewWorkpieceLoaded()
-    {
-        if(!m_rotationPreviewWorkpiece.empty()) {
-            return true;
-        }
-        const simulation_project::SceneObjectDesc* object =
-            findObject(m_context.document(), m_session.objectId);
-        if(object == nullptr || object->objectType != "workpiece") {
-            return false;
-        }
-        const std::filesystem::path sourcePath =
-            simulation_project::AssetResolver::resolveProjectPath(
-                makeResolveContext(m_context.projectSession()),
-                object->sourcePath);
-        std::string loadError;
-        const std::shared_ptr<assetcore::ModelDesc> model =
-            assetcore::AssetManager::instance().tryLoadModel(
-                sourcePath.generic_u8string(),
-                static_cast<float>(object->visualScale),
-                &loadError);
-        if(!model) {
-            return false;
-        }
-        const PaintingAnalysisMeshData mesh = PaintingAnalysisMeshAdapter::build(
-            *model,
-            object->name,
-            sourcePath.generic_u8string(),
-            makeTransform(object->transform));
-        if(mesh.workpiece.empty()) {
-            return false;
-        }
-        m_rotationPreviewWorkpiece = mesh.workpiece;
-        return true;
-    }
-
-    bool CoatingAnalysisModuleController::hasEffectiveRotationAxis() const
-    {
-        return m_hasRotationAxis ||
-            (!m_rotationPreviewWorkpiece.empty() && !m_session.objectId.isEmpty());
-    }
-
-    Eigen::Vector3d CoatingAnalysisModuleController::effectiveRotationAxisOrigin() const
-    {
-        if(m_hasRotationAxis) {
-            return m_rotationAxisOrigin;
-        }
-        if(m_rotationPreviewWorkpiece.empty()) {
-            return Eigen::Vector3d::Zero();
-        }
-        Eigen::Vector3d minimum = Eigen::Vector3d::Constant(
-            std::numeric_limits<double>::max());
-        Eigen::Vector3d maximum = Eigen::Vector3d::Constant(
-            std::numeric_limits<double>::lowest());
-        for(const auto& sample : m_rotationPreviewWorkpiece.samples) {
-            minimum = minimum.cwiseMin(sample.position);
-            maximum = maximum.cwiseMax(sample.position);
-        }
-        return (minimum + maximum) * 0.5;
-    }
-
-    Eigen::Vector3d CoatingAnalysisModuleController::effectiveRotationAxisDirection() const
-    {
-        return m_hasRotationAxis
-            ? m_rotationAxisDirection.normalized()
-            : m_panel.periodicAxisDirection();
-    }
-
-    QString CoatingAnalysisModuleController::rotationAxisSource() const
-    {
-        if(m_hasRotationAxis) {
-            return QStringLiteral("Fitted from cylindrical surface");
-        }
-        if(!m_rotationPreviewWorkpiece.empty() && !m_session.objectId.isEmpty()) {
-            return QStringLiteral("Manual axis");
-        }
-        return QStringLiteral("Not configured");
-    }
-
-    void CoatingAnalysisModuleController::applyLocalDebugVisibility()
-    {
-        if(RobotQtViewerViewportServices* services = m_context.viewportServices()) {
-            CoatingPredictionDebugVisibility visibility;
-            visibility.cylindricalSurface = m_showCylindricalSurface;
-            visibility.rotationAxis = m_showRotationAxis;
-            visibility.localSector = m_showLocalSector;
-            visibility.sprayPoints = m_showLocalSprayPoints;
-            services->setCoatingPredictionDebugVisibility(visibility);
-        }
-    }
-
-    CoatingAnalysisModuleController::~CoatingAnalysisModuleController() = default;
-
-    const std::vector<spraytrajectory::SprayPathPoint>&
-    CoatingAnalysisModuleController::waypoints() const
-    {
-        return m_session.waypoints;
-    }
-
-    const spraytrajectory::SprayPathPoint&
-    CoatingAnalysisModuleController::waypointAt(std::size_t index) const
-    {
-        return m_session.waypoints[index];
-    }
-
-    double CoatingAnalysisModuleController::waypointDurationAt(std::size_t index) const
-    {
-        if(index + 1 < m_session.waypoints.size()) {
-            return std::max(0.0,
-                m_session.waypoints[index + 1].time - m_session.waypoints[index].time);
-        }
-        return -1.0;
     }
 
     void CoatingAnalysisModuleController::activate()
     {
         m_active = true;
-        if(RobotQtViewerViewportServices* services = m_context.viewportServices()) {
-            services->setCoatingAnalysisView(true);
-        }
-        ensureWorkpieceSelection();
-        if(RobotQtViewerViewportServices* services = m_context.viewportServices()) {
-            if(!m_session.objectId.isEmpty()) {
-                services->focusCoatingObject(m_session.objectId, 0.3);
-            }
-        }
-        applyVisualizationState();
         if(m_session.hasResult) {
             if(RobotQtViewerViewportServices* services = m_context.viewportServices()) {
                 if(!services->setSurfaceScalarOverlayVisible(m_session.objectId, true)) {
@@ -567,7 +92,7 @@ namespace robot_qt_viewer
                     }
                 }
                 services->setSurfaceScalarProbeEnabled(
-                    m_session.showThickness && m_session.thicknessPickEnabled,
+                    m_session.showThickness,
                     m_session.objectId);
             }
         }
@@ -579,11 +104,8 @@ namespace robot_qt_viewer
         m_active = false;
         m_hasCurrentThickness = false;
         emit thicknessToolTipRequested(QString(), QPoint(), false);
-        clearModelVisibilityOverrides();
         if(RobotQtViewerViewportServices* services = m_context.viewportServices()) {
-            services->setCoatingAnalysisView(false);
             services->setSurfaceScalarProbeEnabled(false, QString());
-            services->setCoatingTrajectoryPreviewVisible(false);
             if(m_session.hasResult) {
                 services->setSurfaceScalarOverlayVisible(m_session.objectId, false);
             }
@@ -595,48 +117,24 @@ namespace robot_qt_viewer
     {
         if(event.kind == RobotQtViewerEventKind::ProjectOpened) {
             clearSession();
-            ensureWorkpieceSelection();
         } else if(event.kind == RobotQtViewerEventKind::ViewportReloaded &&
             event.viewport.reloadSucceeded) {
-            // The reload rebuilt the scene; re-apply the coating view mode so
-            // robots stay hidden while the coating analysis workbench is active.
-            if(RobotQtViewerViewportServices* services = m_context.viewportServices()) {
-                services->setCoatingAnalysisView(m_active);
-            }
-            applyVisualizationState();
-            if(m_active && !m_session.objectId.isEmpty()) {
-                if(RobotQtViewerViewportServices* services = m_context.viewportServices()) {
-                    services->focusCoatingObject(m_session.objectId, 0.3);
-                }
-            }
             applyOverlayAfterReload();
-        } else if(event.kind == RobotQtViewerEventKind::ProjectDocumentChanged) {
-            if(!m_session.objectId.isEmpty() &&
-                findObject(m_context.document(), m_session.objectId) == nullptr) {
-                clearSession();
-            }
-            ensureWorkpieceSelection();
-            refreshViewModel();
-        } else if(event.kind == RobotQtViewerEventKind::SelectionChanged) {
-            selectWorkpieceFromTree(event.selection.objectId);
+        } else if(event.kind == RobotQtViewerEventKind::ProjectDocumentChanged &&
+            !m_session.objectId.isEmpty() &&
+            findObject(m_context.document(), m_session.objectId) == nullptr) {
+            clearSession();
         }
     }
 
     void CoatingAnalysisModuleController::handleSurfaceScalarHover(
         const QString& objectId,
         double valueMeters,
-        double worldX,
-        double worldY,
-        double worldZ,
         const QPoint& viewportPosition,
         bool hit)
     {
         if(!m_active || !m_session.hasResult || !m_session.showThickness ||
-            !m_session.thicknessPickEnabled ||
             objectId != m_session.objectId || !hit) {
-            if(!m_hasCurrentThickness) {
-                return;
-            }
             m_hasCurrentThickness = false;
             emit thicknessToolTipRequested(QString(), viewportPosition, false);
             refreshViewModel();
@@ -645,51 +143,21 @@ namespace robot_qt_viewer
 
         m_hasCurrentThickness = true;
         m_currentThicknessMeters = valueMeters;
-        const QString text = QStringLiteral(
-            "Vertex\nX: %1 mm\nY: %2 mm\nZ: %3 mm\nThickness: %4 um")
-            .arg(worldX * 1000.0, 0, 'f', 3)
-            .arg(worldY * 1000.0, 0, 'f', 3)
-            .arg(worldZ * 1000.0, 0, 'f', 3)
+        const QString text = QStringLiteral("Thickness: %1 um")
             .arg(valueMeters * kMetersToMicrometers, 0, 'f', 2);
         emit thicknessToolTipRequested(text, viewportPosition, true);
         refreshViewModel();
     }
 
-    bool CoatingAnalysisModuleController::loadModel(
-        const QString& path,
-        double scaleToMeters)
+    void CoatingAnalysisModuleController::openModel()
     {
-        const std::filesystem::path sourcePath = normalizedPath(
-            std::filesystem::path(path.toStdWString()));
-        if(!std::filesystem::exists(sourcePath)) {
-            m_status = QStringLiteral("Model file was not found: %1").arg(path);
-            refreshViewModel();
-            emit statusMessageRequested(m_status, 5000);
-            return false;
-        }
-        const double modelScale = scaleToMeters > 0.0 ? scaleToMeters : 1.0;
-
-        for(const simulation_project::SceneObjectDesc& existing : m_context.document().objects) {
-            if(existing.objectType != "workpiece" || existing.visualScale != modelScale) {
-                continue;
-            }
-            const std::filesystem::path existingPath = normalizedPath(
-                simulation_project::AssetResolver::resolveProjectPath(
-                    makeResolveContext(m_context.projectSession()),
-                    existing.sourcePath));
-            if(existingPath == sourcePath) {
-                selectWorkpiece(QString::fromStdString(existing.id));
-                m_status = QStringLiteral("Existing model reused. Run thickness prediction.");
-                refreshViewModel();
-                emit statusMessageRequested(m_status, 3000);
-                return true;
-            }
+        const QString selectedPath = PaintingAnalysisDialogService::selectModelFile(&m_panel);
+        if(selectedPath.isEmpty()) {
+            return;
         }
 
         if(RobotQtViewerViewportServices* services = m_context.viewportServices()) {
             services->setSurfaceScalarProbeEnabled(false, QString());
-            services->setCoatingTrajectoryPreview({}, false);
-            clearModelVisibilityOverrides();
             if(m_session.hasResult) {
                 services->clearSurfaceScalarOverlay(m_session.objectId);
             }
@@ -701,14 +169,13 @@ namespace robot_qt_viewer
 
         SceneEntityWorkflowController importWorkflow(m_context);
         const SceneEntityImportResult importResult = importWorkflow.importSceneObjectFromPath(
-            sourcePath,
-            "workpiece",
-            modelScale);
+            std::filesystem::path(selectedPath.toStdWString()),
+            "workpiece");
         if(!importResult.success) {
             m_status = importResult.message;
             refreshViewModel();
             emit statusMessageRequested(m_status, 5000);
-            return false;
+            return;
         }
 
         ViewportReloadWorkflowController reloadWorkflow(m_context);
@@ -720,154 +187,37 @@ namespace robot_qt_viewer
             m_status = reloadResult.errorMessage;
             refreshViewModel();
             emit statusMessageRequested(m_status, 5000);
-            return false;
+            return;
         }
 
         m_session.clear();
-        m_hasRotationAxis = false;
-        m_rotationPreviewWorkpiece = sprayworkpiece::WorkpieceModel();
-        m_rotationSurfaceTriangleIndices.clear();
-        m_rotationSeedTriangleIndex = 0;
-        m_rotationFitElapsedMilliseconds = 0.0;
-        m_hasLocalPreview = false;
-        m_localPreviewDetails.clear();
-        clearAxisymmetricProfileSelection();
-        m_panel.setPeriodicLocalPredictionEnabled(false);
         m_session.objectId = importResult.entityId;
         const simulation_project::SceneObjectDesc* object =
             findObject(m_context.document(), m_session.objectId);
         m_session.modelName = object != nullptr
             ? QString::fromStdString(object->name)
-            : QString::fromWCharArray(sourcePath.stem().c_str());
+            : QString::fromStdWString(
+                std::filesystem::path(selectedPath.toStdWString()).stem().wstring());
         m_session.sourcePath = importResult.storedPath;
-        const std::filesystem::path resolvedSourcePath =
-            simulation_project::AssetResolver::resolveProjectPath(
-                makeResolveContext(m_context.projectSession()),
-                object != nullptr ? object->sourcePath : importResult.storedPath.toStdString());
-        std::string modelLoadError;
-        const std::shared_ptr<assetcore::ModelDesc> model =
-            assetcore::AssetManager::instance().tryLoadModel(
-                resolvedSourcePath.generic_u8string(),
-                object != nullptr ? static_cast<float>(object->visualScale) : 1.0f,
-                &modelLoadError);
-        if(model) {
-            m_session.modelInfo = makeModelInfo(
-                *model,
-                object != nullptr
-                    ? makeTransform(object->transform)
-                    : Eigen::Isometry3d::Identity());
-        }
         m_context.selectionModel().selectSceneObject(
             m_session.objectId,
             QStringLiteral("coatingAnalysisOpenModel"));
         if(RobotQtViewerViewportServices* services = m_context.viewportServices()) {
-            if(m_active) {
-                services->selectSceneObject(QString());
-            } else {
-                services->selectSceneObject(m_session.objectId);
-            }
+            services->selectSceneObject(m_session.objectId);
         }
-        applyVisualizationState();
-        if(RobotQtViewerViewportServices* services = m_context.viewportServices()) {
-            if(m_active) {
-                services->focusCoatingObject(m_session.objectId, 0.3);
-            }
-        }
-        m_status = QStringLiteral("Model loaded. Load a trajectory and run thickness prediction.");
+        m_status = QStringLiteral("Model loaded. Run Thickness Prediction.");
         refreshViewModel();
         publishStateChanged();
         emit statusMessageRequested(m_status, 3000);
-        return true;
-    }
-
-    void CoatingAnalysisModuleController::openModelFromDialog()
-    {
-        // This analysis workflow uses the fixed benchmark STL requested for
-        // the current thickness-prediction validation run. The file is in mm.
-        loadModel(kFixedModelPath, 0.001);
-    }
-
-    bool CoatingAnalysisModuleController::loadTrajectory(const QString& path)
-    {
-        const std::filesystem::path sourcePath(path.toStdWString());
-        if(!std::filesystem::exists(sourcePath)) {
-            m_status = QStringLiteral("Spray trajectory was not found: %1").arg(path);
-            refreshViewModel();
-            emit statusMessageRequested(m_status, 5000);
-            return false;
-        }
-
-        const spraytrajectory::LegacySprayTrajectoryLoadResult loadResult =
-            spraytrajectory::LegacySprayTrajectoryIo::loadMatrixText(sourcePath);
-        if(!loadResult.success) {
-            m_status = loadResult.warnings.empty()
-                ? QStringLiteral("Failed to load the spray trajectory.")
-                : QString::fromStdString(loadResult.warnings.front());
-            refreshViewModel();
-            emit statusMessageRequested(m_status, 5000);
-            return false;
-        }
-
-        if(RobotQtViewerViewportServices* services = m_context.viewportServices()) {
-            services->setSurfaceScalarProbeEnabled(false, QString());
-            services->clearCoatingPredictionDebugState();
-            if(m_session.hasResult) {
-                services->clearSurfaceScalarOverlay(m_session.objectId);
-            }
-        }
-        m_session.clearResult();
-        m_session.trajectory = loadResult.trajectory;
-        m_session.waypoints = loadResult.trajectory.flattenedPoints();
-        m_hasLocalPreview = false;
-        m_localPreviewDetails.clear();
-        m_session.trajectoryName = QString::fromStdString(loadResult.trajectory.name);
-        m_session.trajectoryPath = path;
-        m_session.trajectoryInfo = makeTrajectoryInfo(
-            loadResult.trajectory,
-            loadResult.warnings.size());
-        m_treePanel.setWaypoints(&m_session.waypoints);
-        submitTrajectoryPreview();
-        if(m_panel.periodicLocalPredictionEnabled() && hasEffectiveRotationAxis()) {
-            applyModelVisibilityOverrides();
-            previewLocalInputs();
-        }
-        m_hasCurrentThickness = false;
-        emit thicknessToolTipRequested(QString(), QPoint(), false);
-        m_status = QStringLiteral("Trajectory loaded. Ready for GPU thickness prediction.");
-        refreshViewModel();
-        publishStateChanged();
-        emit statusMessageRequested(m_status, 3000);
-        return true;
-    }
-
-    void CoatingAnalysisModuleController::openTrajectoryFromDialog()
-    {
-        loadTrajectory(kFixedTrajectoryPath);
     }
 
     void CoatingAnalysisModuleController::predictThickness()
     {
-        if(m_predictionJob->isRunning()) {
-            return;
-        }
         const simulation_project::SceneObjectDesc* object =
             findObject(m_context.document(), m_session.objectId);
         RobotQtViewerViewportServices* services = m_context.viewportServices();
-        if(object == nullptr || services == nullptr || m_session.trajectory.empty()) {
-            m_status = QStringLiteral("The analysis model, trajectory, or viewport is unavailable.");
-            refreshViewModel();
-            return;
-        }
-        if(m_panel.rotationBasedPredictionEnabled() && !hasEffectiveRotationAxis()) {
-            m_status = QStringLiteral(
-                "Local prediction requires a fitted or manually selected rotation axis.");
-            refreshViewModel();
-            return;
-        }
-        if(m_panel.axisymmetricProfilePredictionEnabled()
-            && !m_axisymmetricProfile->reduction.valid()) {
-            m_status = QStringLiteral(
-                "Axisymmetric profile prediction requires a selected profile region.");
+        if(object == nullptr || services == nullptr) {
+            m_status = QStringLiteral("The analysis model or viewport is unavailable.");
             refreshViewModel();
             return;
         }
@@ -893,106 +243,40 @@ namespace robot_qt_viewer
             PaintingAnalysisMeshData mesh = PaintingAnalysisMeshAdapter::build(
                 *model,
                 object->name,
-                sourcePath.generic_u8string(),
-                makeTransform(object->transform));
+                sourcePath.generic_u8string());
             if(mesh.workpiece.empty()) {
                 m_status = QStringLiteral("The model has no mesh vertices.");
                 refreshViewModel();
                 return;
             }
-
-            services->setSurfaceScalarProbeEnabled(false, QString());
-            if(m_session.hasResult) {
-                services->clearSurfaceScalarOverlay(m_session.objectId);
-            }
-            m_session.clearResult();
-            m_session.binding = std::move(mesh.binding);
-            m_hasCurrentThickness = false;
-
-            spraythickness::ThicknessPredictionTask task;
-            task.model = m_panel.thicknessModel();
-            task.workpiece = std::move(mesh.workpiece);
-            task.trajectory = m_session.trajectory;
-            task.tool.name = "Legacy spray gun";
-            task.tool.sprayDirectionLocal = Eigen::Vector3d::UnitX();
-            task.process.id = spraythickness::thicknessModelId(task.model);
-            task.process.name = task.process.id;
-            task.options.base.trajectorySamplingMode = m_panel.trajectorySamplingMode();
-            task.options.base.timeStep = m_panel.timeStepSeconds();
-            task.options.enableBvhOcclusion = m_panel.bvhOcclusionEnabled();
-            task.options.enableHistoryCorrection = m_panel.historyCorrectionEnabled();
-            task.options.periodicLocal.enabled = m_panel.periodicLocalPredictionEnabled();
-            task.options.axisymmetricProfile.enabled =
-                m_panel.axisymmetricProfilePredictionEnabled();
-            task.options.spatialFiltering.enabled =
-                m_panel.spatialInfluenceFilteringEnabled();
-            task.options.spatialFiltering.overrideGridCellSize =
-                m_panel.overrideSpatialGridCellSize();
-            task.options.spatialFiltering.gridCellSizeMeters =
-                task.options.spatialFiltering.overrideGridCellSize
-                ? m_panel.spatialGridCellSizeMillimeters() * 1.0e-3
-                : 0.0;
-            if(task.options.periodicLocal.enabled) {
-                Eigen::Vector3d boundsMinimum = Eigen::Vector3d::Constant(
-                    std::numeric_limits<double>::max());
-                Eigen::Vector3d boundsMaximum = Eigen::Vector3d::Constant(
-                    std::numeric_limits<double>::lowest());
-                for(const auto& sample : task.workpiece.samples) {
-                    boundsMinimum = boundsMinimum.cwiseMin(sample.position);
-                    boundsMaximum = boundsMaximum.cwiseMax(sample.position);
-                }
-                const Eigen::Vector3d axis = effectiveRotationAxisDirection();
-                task.options.periodicLocal.axisOrigin = m_hasRotationAxis
-                    ? m_rotationAxisOrigin
-                    : (boundsMinimum + boundsMaximum) * 0.5;
-                task.options.periodicLocal.axisDirection = axis.normalized();
-                task.options.periodicLocal.referenceDirection = std::abs(axis.x()) < 0.9
-                    ? Eigen::Vector3d::UnitX()
-                    : Eigen::Vector3d::UnitY();
-                task.options.periodicLocal.sectorCount = m_panel.periodicSectorCount();
-                task.options.periodicLocal.angularHaloRadians = 0.0;
-                task.options.periodicLocal.reduceTrajectory = false;
-                task.options.periodicLocal.fallbackToFullPrediction = false;
-            }
-            if(task.options.axisymmetricProfile.enabled) {
-                task.options.axisymmetricProfile.predictionSamples =
-                    m_axisymmetricProfile->reduction.predictionSamples;
-                task.options.axisymmetricProfile.sampleSegments =
-                    m_axisymmetricProfile->reduction.sampleSegments;
-                task.options.axisymmetricProfile.axisOrigin =
-                    m_axisymmetricProfile->slice.axisOrigin;
-                task.options.axisymmetricProfile.axisDirection =
-                    m_axisymmetricProfile->slice.axisDirection;
-                task.options.axisymmetricProfile.radialDirection =
-                    m_axisymmetricProfile->slice.radialDirection;
-                task.options.axisymmetricProfile.selectionMinimum =
-                    m_axisymmetricProfile->selection.minimum;
-                task.options.axisymmetricProfile.selectionMaximum =
-                    m_axisymmetricProfile->selection.maximum;
-            }
-
-            m_predictionObjectId = QString::fromStdString(object->id);
-            m_predictionProgress = 0.0;
-            m_status = QStringLiteral("Preparing GPU thickness prediction...");
-            m_session.predictionElapsedSeconds = 0.0;
-            refreshViewModel();
-            publishStateChanged();
-
-            m_predictionStartedAt = std::chrono::steady_clock::now();
-            m_predictionTimerActive = true;
-            if(!m_predictionJob->start(std::move(task))) {
-                m_predictionObjectId.clear();
-                m_predictionProgress = 0.0;
-                m_predictionTimerActive = false;
-                m_session.clearResult();
-                m_status = QStringLiteral("Failed to start the GPU thickness prediction task.");
+            spraythickness::ThicknessPredictionResult prediction =
+                spraythickness::DemoThicknessPredictor::predict(mesh.workpiece);
+            smrobot::visualization::SurfaceScalarOverlay overlay =
+                PaintingAnalysisMeshAdapter::makeOverlay(
+                    object->id,
+                    mesh.binding,
+                    prediction);
+            QString applyError;
+            if(!services->applySurfaceScalarOverlay(overlay, &applyError)) {
+                m_status = applyError.isEmpty()
+                    ? QStringLiteral("Failed to display the thickness result.")
+                    : applyError;
                 refreshViewModel();
                 return;
             }
+
+            m_session.binding = std::move(mesh.binding);
+            m_session.prediction = std::move(prediction);
+            m_session.overlay = std::move(overlay);
+            m_session.hasResult = true;
+            m_session.showThickness = false;
+            m_hasCurrentThickness = false;
+            services->setSurfaceScalarProbeEnabled(false, QString());
+            m_status = QStringLiteral("Demo thickness prediction completed.");
+            refreshViewModel();
+            publishStateChanged();
+            emit statusMessageRequested(m_status, 3000);
         } catch(const std::exception& exception) {
-            m_predictionObjectId.clear();
-            m_predictionProgress = 0.0;
-            m_predictionTimerActive = false;
             services->clearSurfaceScalarOverlay(m_session.objectId);
             m_session.clearResult();
             m_status = QString::fromLocal8Bit(exception.what());
@@ -1001,650 +285,29 @@ namespace robot_qt_viewer
         }
     }
 
-    void CoatingAnalysisModuleController::previewLocalInputs()
-    {
-        const auto previewStart = std::chrono::steady_clock::now();
-        if(m_predictionJob->isRunning() || m_session.trajectory.empty() ||
-            !ensurePreviewWorkpieceLoaded() || !hasEffectiveRotationAxis()) {
-            m_status = QStringLiteral(
-                "Configure a fitted or manual rotation axis and load a trajectory before previewing local inputs.");
-            refreshViewModel();
-            return;
-        }
-
-        spraythickness::ThicknessPredictionTask task;
-        task.trajectory = m_session.trajectory;
-        task.tool.name = "Legacy spray gun";
-        task.tool.sprayDirectionLocal = Eigen::Vector3d::UnitX();
-        task.process.id = spraythickness::thicknessModelId(m_panel.thicknessModel());
-        task.options.base.trajectorySamplingMode = m_panel.trajectorySamplingMode();
-        task.options.base.timeStep = m_panel.timeStepSeconds();
-        task.options.periodicLocal.enabled = true;
-        task.options.periodicLocal.axisOrigin = effectiveRotationAxisOrigin();
-        task.options.periodicLocal.axisDirection = effectiveRotationAxisDirection();
-        task.options.periodicLocal.referenceDirection =
-            std::abs(task.options.periodicLocal.axisDirection.x()) < 0.9
-                ? Eigen::Vector3d::UnitX()
-                : Eigen::Vector3d::UnitY();
-        task.options.periodicLocal.sectorCount = m_panel.periodicSectorCount();
-        task.options.periodicLocal.angularHaloRadians = 0.0;
-        task.options.periodicLocal.reduceTrajectory = false;
-
-        const spraythickness::opengl::PeriodicSectorReduction reduction =
-            spraythickness::opengl::buildPeriodicSectorReduction(
-                m_rotationPreviewWorkpiece,
-                task.options.periodicLocal,
-                false);
-        const double sectorSelectionMilliseconds = elapsedMilliseconds(previewStart);
-        if(!reduction.localSelectionValid()) {
-            m_hasLocalPreview = false;
-            m_localPreviewDetails.clear();
-            m_status = QStringLiteral("Local input preview failed: %1")
-                .arg(QString::fromStdString(reduction.failureReason));
-            refreshViewModel();
-            return;
-        }
-
-        const std::vector<spraythickness::opengl::PeriodicSpraySample> samples =
-            spraythickness::opengl::makePeriodicSpraySamples(task);
-        std::vector<std::size_t> selectedSprayIndices(samples.size());
-        std::iota(selectedSprayIndices.begin(), selectedSprayIndices.end(), 0U);
-
-        RobotQtViewerViewportServices* services = m_context.viewportServices();
-        if(services == nullptr) {
-            return;
-        }
-
-        CoatingPredictionDebugState state;
-        state.visible = true;
-        state.objectId = m_session.objectId;
-        configureAxisDebugState(
-            state,
-            m_rotationPreviewWorkpiece,
-            task.options.periodicLocal.axisOrigin,
-            task.options.periodicLocal.axisDirection);
-
-        state.cylindricalTriangles.reserve(m_rotationSurfaceTriangleIndices.size());
-        for(const std::size_t triangleIndex : m_rotationSurfaceTriangleIndices) {
-            state.cylindricalTriangles.push_back(
-                makeDebugTriangle(m_rotationPreviewWorkpiece, triangleIndex));
-        }
-        if(m_hasRotationAxis) {
-            state.seedTriangles.push_back(
-                makeDebugTriangle(m_rotationPreviewWorkpiece, m_rotationSeedTriangleIndex));
-        }
-
-        state.localSectorTriangles.reserve(reduction.predictionTriangleIndices.size());
-        state.localSectorVertexIndices = reduction.predictionVertexIndices;
-        for(const std::uint32_t triangleIndex : reduction.predictionTriangleIndices) {
-            state.localSectorTriangles.push_back(
-                makeDebugTriangle(m_rotationPreviewWorkpiece, triangleIndex));
-        }
-        state.sprayPoints.reserve(selectedSprayIndices.size());
-        for(const std::size_t index : selectedSprayIndices) {
-            if(index >= samples.size()) {
-                continue;
-            }
-            const auto& sample = samples[index];
-            CoatingPredictionDebugPoint point;
-            point.positionX = sample.position.x();
-            point.positionY = sample.position.y();
-            point.positionZ = sample.position.z();
-            point.directionX = sample.direction.x();
-            point.directionY = sample.direction.y();
-            point.directionZ = sample.direction.z();
-            state.sprayPoints.push_back(point);
-        }
-        services->setCoatingPredictionDebugState(state);
-        applyLocalDebugVisibility();
-        const double previewMilliseconds = elapsedMilliseconds(previewStart);
-        LOG_DEBUG("rs2026") << "Coating local preview: sectorSelectionMs="
-            << sectorSelectionMilliseconds
-            << ", totalMs=" << previewMilliseconds
-            << ", localTriangles=" << reduction.predictionTriangleIndices.size()
-            << ", localVertices=" << reduction.predictionVertexIndices.size()
-            << ", sprayPoints=" << selectedSprayIndices.size();
-
-        const double sectorAngleDegrees =
-            360.0 / static_cast<double>(task.options.periodicLocal.sectorCount);
-        m_localPreviewDetails = QStringLiteral(
-            "Local preview: vertices %1, triangles %2, spray points %3/%4, base angle %5 deg, exact triangle-sector selection, fit %6 ms, preview %7 ms")
-            .arg(static_cast<qulonglong>(reduction.predictionVertexIndices.size()))
-            .arg(static_cast<qulonglong>(reduction.predictionTriangleIndices.size()))
-            .arg(static_cast<qulonglong>(selectedSprayIndices.size()))
-            .arg(static_cast<qulonglong>(samples.size()))
-            .arg(sectorAngleDegrees, 0, 'f', 2)
-            .arg(m_rotationFitElapsedMilliseconds, 0, 'f', 1)
-            .arg(previewMilliseconds, 0, 'f', 1);
-        m_hasLocalPreview = true;
-        m_status = m_localPreviewDetails;
-        refreshViewModel();
-        emit statusMessageRequested(m_status, 5000);
-    }
-
-    bool CoatingAnalysisModuleController::ensureAxisymmetricProfileSlice()
-    {
-        if(!m_axisymmetricProfile->slice.valid()) {
-            const Eigen::Vector3d axis = effectiveRotationAxisDirection();
-            const Eigen::Vector3d reference = std::abs(axis.x()) < 0.9
-                ? Eigen::Vector3d::UnitX()
-                : Eigen::Vector3d::UnitY();
-            m_axisymmetricProfile->slice =
-                spraythickness::opengl::buildAxisymmetricProfileSlice(
-                    m_rotationPreviewWorkpiece,
-                    effectiveRotationAxisOrigin(),
-                    axis,
-                    reference);
-        }
-        if(!m_axisymmetricProfile->slice.valid()) {
-            m_status = QStringLiteral("Profile extraction failed: %1").arg(
-                QString::fromStdString(m_axisymmetricProfile->slice.failureReason));
-            return false;
-        }
-        return true;
-    }
-
-    void CoatingAnalysisModuleController::clearAxisymmetricProfileSelection()
-    {
-        m_axisymmetricProfile->selection =
-            spraythickness::opengl::AxisymmetricProfileSelection();
-        m_axisymmetricProfile->reduction =
-            spraythickness::opengl::AxisymmetricProfileReduction();
-        m_axisymmetricProfile->slice =
-            spraythickness::opengl::AxisymmetricProfileSlice();
-        m_axisymmetricProfile->details.clear();
-    }
-
-    void CoatingAnalysisModuleController::updateAxisymmetricProfileDebugState()
-    {
-        RobotQtViewerViewportServices* services = m_context.viewportServices();
-        if(services == nullptr || m_rotationPreviewWorkpiece.empty()) {
-            return;
-        }
-        CoatingPredictionDebugState state;
-        state.visible = true;
-        state.objectId = m_session.objectId;
-        configureAxisDebugState(
-            state,
-            m_rotationPreviewWorkpiece,
-            effectiveRotationAxisOrigin(),
-            effectiveRotationAxisDirection());
-        state.cylindricalTriangles.reserve(m_rotationSurfaceTriangleIndices.size());
-        for(const std::size_t triangleIndex : m_rotationSurfaceTriangleIndices) {
-            state.cylindricalTriangles.push_back(
-                makeDebugTriangle(m_rotationPreviewWorkpiece, triangleIndex));
-        }
-        if(m_hasRotationAxis) {
-            state.seedTriangles.push_back(
-                makeDebugTriangle(m_rotationPreviewWorkpiece, m_rotationSeedTriangleIndex));
-        }
-        std::size_t completeLinePointCount = 0;
-        for(const auto& contour : m_axisymmetricProfile->slice.contours) {
-            if(contour.points.size() >= 2) {
-                completeLinePointCount += (contour.points.size() - 1) * 2;
-                if(contour.closed) {
-                    completeLinePointCount += 2;
-                }
-            }
-        }
-        state.profileLinePoints.reserve(completeLinePointCount);
-        const auto appendProfilePoint = [](const auto& point,
-            std::vector<CoatingPredictionDebugPoint>& output) {
-            CoatingPredictionDebugPoint debugPoint;
-            debugPoint.positionX = point.position.x();
-            debugPoint.positionY = point.position.y();
-            debugPoint.positionZ = point.position.z();
-            output.push_back(debugPoint);
-        };
-        for(const auto& contour : m_axisymmetricProfile->slice.contours) {
-            for(std::size_t index = 0; index + 1 < contour.points.size(); ++index) {
-                appendProfilePoint(contour.points[index], state.profileLinePoints);
-                appendProfilePoint(contour.points[index + 1], state.profileLinePoints);
-            }
-            if(contour.closed && contour.points.size() >= 2) {
-                appendProfilePoint(contour.points.back(), state.profileLinePoints);
-                appendProfilePoint(contour.points.front(), state.profileLinePoints);
-            }
-        }
-        state.selectedProfileLinePoints.reserve(
-            m_axisymmetricProfile->reduction.displayLineSegments.size());
-        for(const auto& point : m_axisymmetricProfile->reduction.displayLineSegments) {
-            appendProfilePoint(point, state.selectedProfileLinePoints);
-        }
-        services->setCoatingPredictionDebugState(state);
-        applyLocalDebugVisibility();
-    }
-
-    bool CoatingAnalysisModuleController::rebuildAxisymmetricProfileReduction()
-    {
-        const auto reduction =
-            spraythickness::opengl::buildAxisymmetricProfileReduction(
-                m_axisymmetricProfile->slice,
-                m_axisymmetricProfile->selection,
-                m_panel.axisymmetricProfileSampleCount());
-        if(!reduction.valid()) {
-            m_status = QStringLiteral("Profile region preparation failed: %1").arg(
-                QString::fromStdString(reduction.failureReason));
-            refreshViewModel();
-            return false;
-        }
-        if(m_session.hasResult) {
-            if(RobotQtViewerViewportServices* services = m_context.viewportServices()) {
-                services->setSurfaceScalarProbeEnabled(false, QString());
-                services->clearSurfaceScalarOverlay(m_session.objectId);
-            }
-            m_session.clearResult();
-            m_hasCurrentThickness = false;
-        }
-        m_axisymmetricProfile->reduction = reduction;
-        m_axisymmetricProfile->details = QStringLiteral(
-            "Profile region: %1/%2 uniform samples, %3 segments, arc length %4 mm")
-            .arg(static_cast<qulonglong>(reduction.actualSampleCount))
-            .arg(static_cast<qulonglong>(reduction.requestedSampleCount))
-            .arg(static_cast<qulonglong>(reduction.sampleSegments.size()))
-            .arg(reduction.selectedArcLengthMeters * 1000.0, 0, 'f', 3);
-        m_status = m_axisymmetricProfile->details;
-        updateAxisymmetricProfileDebugState();
-        applyModelVisibilityOverrides();
-        refreshViewModel();
-        publishStateChanged();
-        return true;
-    }
-
-    void CoatingAnalysisModuleController::selectAxisymmetricProfileRegion()
-    {
-        if(m_predictionJob->isRunning() || !ensurePreviewWorkpieceLoaded()
-            || !hasEffectiveRotationAxis() || !ensureAxisymmetricProfileSlice()) {
-            refreshViewModel();
-            return;
-        }
-        AxisymmetricProfileSelectionDialog dialog(
-            m_axisymmetricProfile->slice, &m_panel);
-        if(dialog.exec() != QDialog::Accepted) {
-            return;
-        }
-        const auto selection = dialog.selection();
-        if(!selection.enabled) {
-            m_status = QStringLiteral("Draw a rectangular profile region before accepting.");
-            refreshViewModel();
-            return;
-        }
-        m_axisymmetricProfile->selection = selection;
-        rebuildAxisymmetricProfileReduction();
-    }
-
-    void CoatingAnalysisModuleController::cancelPrediction()
-    {
-        if(!m_predictionJob->isRunning()) {
-            return;
-        }
-        m_predictionJob->cancel();
-        m_status = QStringLiteral("Canceling GPU thickness prediction...");
-        refreshViewModel();
-    }
-
-    void CoatingAnalysisModuleController::handlePredictionProgress(
-        double progress,
-        const QString& message)
-    {
-        if(m_predictionObjectId.isEmpty()) {
-            return;
-        }
-        m_predictionProgress = std::clamp(progress, 0.0, 1.0);
-        m_status = message;
-        if(message.contains(QStringLiteral("Spatial grid ready:"))
-            || message.contains(QStringLiteral("Spatial grid cache hit:"))) {
-            LOG_DEBUG("rs2026") << message.toStdString();
-        }
-        refreshViewModel();
-    }
-
-    void CoatingAnalysisModuleController::handlePredictionFinished(
-        const spraythickness::ThicknessPredictionResult& prediction)
-    {
-        const QString objectId = m_predictionObjectId;
-        if(objectId.isEmpty()) {
-            return;
-        }
-        const double elapsedSeconds = m_predictionTimerActive
-            ? std::chrono::duration<double>(
-                std::chrono::steady_clock::now() - m_predictionStartedAt).count()
-            : 0.0;
-        m_predictionTimerActive = false;
-        m_predictionObjectId.clear();
-        m_predictionProgress = 0.0;
-
-        if(prediction.field.empty()) {
-            m_session.clearResult();
-            m_status = prediction.warnings.empty()
-                ? QStringLiteral("GPU thickness prediction produced no result.")
-                : QString::fromStdString(prediction.warnings.front());
-            refreshViewModel();
-            publishStateChanged();
-            return;
-        }
-
-        RobotQtViewerViewportServices* services = m_context.viewportServices();
-        if(services == nullptr || findObject(m_context.document(), objectId) == nullptr) {
-            m_session.clearResult();
-            m_status = QStringLiteral("The analysis model or viewport is no longer available.");
-            refreshViewModel();
-            publishStateChanged();
-            return;
-        }
-
-        try {
-            smrobot::visualization::SurfaceScalarOverlay overlay =
-                PaintingAnalysisMeshAdapter::makeOverlay(
-                    objectId.toStdString(),
-                    m_session.binding,
-                    prediction);
-            // Restore the original workpiece before creating the thickness
-            // model. Otherwise deferred local-debug cleanup can replace the
-            // freshly uploaded thickness overlay on the next viewport frame.
-            services->clearCoatingPredictionDebugState();
-            QString applyError;
-            if(!services->applySurfaceScalarOverlay(overlay, &applyError)) {
-                m_session.clearResult();
-                m_status = applyError.isEmpty()
-                    ? QStringLiteral("Failed to display the thickness result.")
-                    : applyError;
-                refreshViewModel();
-                publishStateChanged();
-                return;
-            }
-
-            m_session.prediction = prediction;
-            m_session.overlay = std::move(overlay);
-            m_session.predictionElapsedSeconds = elapsedSeconds;
-            m_session.hasResult = true;
-            m_session.showThickness = true;
-            // Ensure the prediction workpiece node is visible so the scalar
-            // overlay model actually renders.
-            services->setCoatingModelVisible(objectId, true);
-            services->setSurfaceScalarOverlayVisible(objectId, true);
-            services->setSurfaceScalarProbeEnabled(false, QString());
-            m_status = QStringLiteral("GPU thickness prediction completed in %1 s.")
-                .arg(elapsedSeconds, 0, 'f', 3);
-            refreshViewModel();
-            publishStateChanged();
-            emit statusMessageRequested(m_status, 3000);
-        } catch(const std::exception& exception) {
-            services->clearSurfaceScalarOverlay(objectId);
-            m_session.clearResult();
-            m_status = QString::fromLocal8Bit(exception.what());
-            refreshViewModel();
-            publishStateChanged();
-        }
-    }
-
-    void CoatingAnalysisModuleController::handlePredictionFailed(const QString& message)
-    {
-        if(m_predictionObjectId.isEmpty()) {
-            return;
-        }
-        m_predictionObjectId.clear();
-        m_predictionProgress = 0.0;
-        m_predictionTimerActive = false;
-        m_session.clearResult();
-        m_status = message.isEmpty()
-            ? QStringLiteral("GPU thickness prediction failed.")
-            : message;
-        refreshViewModel();
-        publishStateChanged();
-        emit statusMessageRequested(m_status, 5000);
-    }
-
-    void CoatingAnalysisModuleController::setShowModel(bool enabled)
-    {
-        m_session.showModel = enabled;
-        applyModelVisibilityOverrides();
-        refreshViewModel();
-    }
-
-    void CoatingAnalysisModuleController::setShowSprayPoints(bool enabled)
-    {
-        m_session.showSprayPoints = enabled;
-        updateTrajectoryPreviewVisibility();
-        refreshViewModel();
-    }
-
-    void CoatingAnalysisModuleController::setLocalDebugVisibility(
-        bool cylindricalSurface,
-        bool rotationAxis,
-        bool localSector,
-        bool sprayPoints)
-    {
-        m_showCylindricalSurface = cylindricalSurface;
-        m_showRotationAxis = rotationAxis;
-        m_showLocalSector = localSector;
-        m_showLocalSprayPoints = sprayPoints;
-        applyLocalDebugVisibility();
-        refreshViewModel();
-    }
-
     void CoatingAnalysisModuleController::setShowThickness(bool enabled)
     {
         m_session.showThickness = enabled && m_session.hasResult;
-        if(!m_session.showThickness) {
-            m_session.thicknessPickEnabled = false;
-        }
         m_hasCurrentThickness = false;
         emit thicknessToolTipRequested(QString(), QPoint(), false);
         if(RobotQtViewerViewportServices* services = m_context.viewportServices()) {
             services->setSurfaceScalarProbeEnabled(
-                m_active && m_session.showThickness && m_session.thicknessPickEnabled,
+                m_active && m_session.showThickness,
                 m_session.objectId);
-            if(m_session.hasResult) {
-                if(!services->setSurfaceScalarOverlayVisible(
-                        m_session.objectId,
-                        m_session.showThickness)
-                    && m_session.showThickness) {
-                    QString error;
-                    if(!services->applySurfaceScalarOverlay(m_session.overlay, &error)) {
-                        m_session.clearResult();
-                        m_status = error.isEmpty()
-                            ? QStringLiteral("Failed to re-apply the thickness overlay.")
-                            : error;
-                    }
-                }
-            }
         }
         refreshViewModel();
         publishStateChanged();
-    }
-
-    void CoatingAnalysisModuleController::setThicknessPickEnabled(bool enabled)
-    {
-        m_session.thicknessPickEnabled = enabled && m_active &&
-            m_session.hasResult && m_session.showThickness;
-        m_hasCurrentThickness = false;
-        emit thicknessToolTipRequested(QString(), QPoint(), false);
-        if(RobotQtViewerViewportServices* services = m_context.viewportServices()) {
-            services->setSurfaceScalarProbeEnabled(
-                m_session.thicknessPickEnabled,
-                m_session.thicknessPickEnabled ? m_session.objectId : QString());
-        }
-        refreshViewModel();
-        publishStateChanged();
-    }
-
-    void CoatingAnalysisModuleController::selectWorkpiece(const QString& objectId)
-    {
-        const simulation_project::SceneObjectDesc* object =
-            findObject(m_context.document(), objectId);
-        if(object == nullptr || object->objectType != "workpiece" ||
-            objectId == m_session.objectId || m_predictionJob->isRunning()) {
-            refreshViewModel();
-            return;
-        }
-
-        clearModelVisibilityOverrides();
-        if(RobotQtViewerViewportServices* services = m_context.viewportServices()) {
-            services->setSurfaceScalarProbeEnabled(false, QString());
-            services->clearCoatingPredictionDebugState();
-            if(!m_session.objectId.isEmpty() && m_session.hasResult) {
-                services->clearSurfaceScalarOverlay(m_session.objectId);
-            }
-        }
-        m_session.clearResult();
-        m_session.objectId = objectId;
-        m_session.modelName = QString::fromStdString(object->name);
-        m_session.sourcePath = QString::fromStdString(object->sourcePath);
-        m_session.modelInfo = CoatingAnalysisModelInfo();
-        m_hasRotationAxis = false;
-        m_rotationPreviewWorkpiece = sprayworkpiece::WorkpieceModel();
-        m_rotationSurfaceTriangleIndices.clear();
-        m_rotationSeedTriangleIndex = 0;
-        m_rotationFitElapsedMilliseconds = 0.0;
-        m_hasLocalPreview = false;
-        m_localPreviewDetails.clear();
-        clearAxisymmetricProfileSelection();
-        m_panel.setPeriodicLocalPredictionEnabled(false);
-        m_hasCurrentThickness = false;
-        updateSelectedModelInfo();
-        applyModelVisibilityOverrides();
-        updateTrajectoryPreviewVisibility();
-        m_context.selectionModel().selectSceneObject(
-            objectId,
-            QStringLiteral("coatingAnalysisWorkpiece"));
-        if(RobotQtViewerViewportServices* services = m_context.viewportServices()) {
-            if(m_active) {
-                services->selectSceneObject(QString());
-                services->focusCoatingObject(objectId, 0.3);
-            } else {
-                services->selectSceneObject(objectId);
-            }
-        }
-        m_status = QStringLiteral("Prediction workpiece selected: %1")
-            .arg(m_session.modelName);
-        refreshViewModel();
-        publishStateChanged();
-    }
-
-    void CoatingAnalysisModuleController::selectWorkpieceFromTree(const QString& objectId)
-    {
-        const simulation_project::SceneObjectDesc* object =
-            findObject(m_context.document(), objectId);
-        if(object != nullptr && object->objectType == "workpiece") {
-            selectWorkpiece(objectId);
-        }
-    }
-
-    void CoatingAnalysisModuleController::ensureWorkpieceSelection()
-    {
-        const simulation_project::ProjectDocument& document = m_context.document();
-        const simulation_project::SceneObjectDesc* selected =
-            findObject(document, m_session.objectId);
-        if(selected != nullptr && selected->objectType == "workpiece") {
-            return;
-        }
-
-        const QString treeObjectId = m_context.selectionModel().state().objectId;
-        const simulation_project::SceneObjectDesc* treeObject =
-            findObject(document, treeObjectId);
-        if(treeObject != nullptr && treeObject->objectType == "workpiece") {
-            selectWorkpiece(treeObjectId);
-            return;
-        }
-        for(const simulation_project::SceneObjectDesc& object : document.objects) {
-            if(object.objectType == "workpiece") {
-                selectWorkpiece(QString::fromStdString(object.id));
-                return;
-            }
-        }
-    }
-
-    void CoatingAnalysisModuleController::updateSelectedModelInfo()
-    {
-        const simulation_project::SceneObjectDesc* object =
-            findObject(m_context.document(), m_session.objectId);
-        if(object == nullptr) {
-            return;
-        }
-        const std::filesystem::path sourcePath = simulation_project::AssetResolver::resolveProjectPath(
-            makeResolveContext(m_context.projectSession()),
-            object->sourcePath);
-        std::string loadError;
-        const std::shared_ptr<assetcore::ModelDesc> model =
-            assetcore::AssetManager::instance().tryLoadModel(
-                sourcePath.generic_u8string(),
-                static_cast<float>(object->visualScale),
-                &loadError);
-        if(model) {
-            m_session.modelInfo = makeModelInfo(*model, makeTransform(object->transform));
-        }
-    }
-
-    void CoatingAnalysisModuleController::clearModelVisibilityOverrides()
-    {
-        if(!m_modelVisibilityOverrideIds.empty()) {
-            if(RobotQtViewerViewportServices* services = m_context.viewportServices()) {
-                services->setCoatingModelVisibilities({});
-            }
-            m_modelVisibilityOverrideIds.clear();
-        }
-    }
-
-    void CoatingAnalysisModuleController::applyModelVisibilityOverrides()
-    {
-        if(!m_active || m_session.objectId.isEmpty()) {
-            clearModelVisibilityOverrides();
-            return;
-        }
-        m_modelVisibilityOverrideIds.clear();
-        RobotQtViewerViewportServices* services = m_context.viewportServices();
-        if(services == nullptr) {
-            return;
-        }
-
-        QHash<QString, bool> visibility;
-        for(const simulation_project::SceneObjectDesc& object : m_context.document().objects) {
-            if(object.objectType != "workpiece") {
-                continue;
-            }
-            const QString objectId = QString::fromStdString(object.id);
-            const bool requestedVisibility = m_modelVisibility.contains(objectId)
-                ? m_modelVisibility.value(objectId)
-                : (objectId == m_session.objectId && m_session.showModel);
-            // Keep the original STL visible during local preview. The local
-            // prediction sector is rendered separately as a green overlay;
-            // keeping the source object visible preserves exact picking and
-            // rotation-center behavior without changing prediction inputs.
-            visibility[objectId] = requestedVisibility;
-        }
-        services->setCoatingModelVisibilities(visibility);
-        for(const QString& objectId : visibility.keys()) {
-            m_modelVisibilityOverrideIds.push_back(objectId);
-        }
     }
 
     void CoatingAnalysisModuleController::clearSession()
     {
-        m_predictionJob->cancel();
-        m_predictionObjectId.clear();
-        m_predictionProgress = 0.0;
-        m_predictionTimerActive = false;
-        clearModelVisibilityOverrides();
-        m_modelVisibility.clear();
         if(RobotQtViewerViewportServices* services = m_context.viewportServices()) {
             services->setSurfaceScalarProbeEnabled(false, QString());
-            services->setCoatingTrajectoryPreview({}, false);
             if(m_session.hasResult) {
                 services->clearSurfaceScalarOverlay(m_session.objectId);
             }
         }
         m_session.clear();
-        m_hasRotationAxis = false;
-        m_rotationPreviewWorkpiece = sprayworkpiece::WorkpieceModel();
-        m_rotationSurfaceTriangleIndices.clear();
-        m_rotationSeedTriangleIndex = 0;
-        m_rotationFitElapsedMilliseconds = 0.0;
-        m_hasLocalPreview = false;
-        m_localPreviewDetails.clear();
-        clearAxisymmetricProfileSelection();
-        m_panel.setPeriodicLocalPredictionEnabled(false);
-        m_treePanel.setWaypoints(nullptr);
         m_hasCurrentThickness = false;
         m_status = QStringLiteral("Open a mesh model to begin.");
         emit thicknessToolTipRequested(QString(), QPoint(), false);
@@ -1652,75 +315,9 @@ namespace robot_qt_viewer
         publishStateChanged();
     }
 
-    void CoatingAnalysisModuleController::applyVisualizationState()
-    {
-        RobotQtViewerViewportServices* services = m_context.viewportServices();
-        if(services == nullptr) {
-            return;
-        }
-        applyModelVisibilityOverrides();
-        updateTrajectoryPreviewVisibility();
-    }
-
-    void CoatingAnalysisModuleController::updateTrajectoryPreviewVisibility()
-    {
-        RobotQtViewerViewportServices* services = m_context.viewportServices();
-        if(services == nullptr) {
-            return;
-        }
-        const bool visible = m_active && m_session.showSprayPoints &&
-            !m_session.waypoints.empty();
-        if(visible && !services->setCoatingTrajectoryPreviewVisible(true)) {
-            submitTrajectoryPreview();
-            return;
-        }
-        if(!visible) {
-            services->setCoatingTrajectoryPreviewVisible(false);
-        }
-    }
-
-    void CoatingAnalysisModuleController::submitTrajectoryPreview()
-    {
-        RobotQtViewerViewportServices* services = m_context.viewportServices();
-        if(services == nullptr) {
-            return;
-        }
-
-        std::size_t totalPointCount = 0;
-        for(const spraytrajectory::SpraySegment& segment : m_session.trajectory.segments) {
-            totalPointCount += segment.points.size();
-        }
-        std::vector<CoatingTrajectoryPreviewPoint> previewPoints;
-        previewPoints.reserve(totalPointCount);
-        for(const spraytrajectory::SpraySegment& segment : m_session.trajectory.segments) {
-            bool startsNewSegment = true;
-            for(std::size_t pointIndex = 0; pointIndex < segment.points.size();
-                ++pointIndex) {
-                const spraytrajectory::SprayPathPoint& point = segment.points[pointIndex];
-                const Eigen::Vector3d position = point.tcpPose.translation();
-                const Eigen::Vector3d direction =
-                    point.tcpPose.linear() * Eigen::Vector3d::UnitX();
-                CoatingTrajectoryPreviewPoint previewPoint;
-                previewPoint.positionX = position.x();
-                previewPoint.positionY = position.y();
-                previewPoint.positionZ = position.z();
-                previewPoint.directionX = direction.x();
-                previewPoint.directionY = direction.y();
-                previewPoint.directionZ = direction.z();
-                previewPoint.sprayEnabled = point.sprayEnabled && segment.sprayEnabled;
-                previewPoint.startsNewSegment = startsNewSegment;
-                previewPoints.push_back(previewPoint);
-                startsNewSegment = false;
-            }
-        }
-        services->setCoatingTrajectoryPreview(
-            previewPoints,
-            m_active && m_session.showSprayPoints && !previewPoints.empty());
-    }
-
     void CoatingAnalysisModuleController::applyOverlayAfterReload()
     {
-        if(!m_session.hasResult || !m_active || !m_session.showThickness ||
+        if(!m_session.hasResult || !m_active ||
             findObject(m_context.document(), m_session.objectId) == nullptr) {
             return;
         }
@@ -1728,7 +325,7 @@ namespace robot_qt_viewer
             QString error;
             if(services->applySurfaceScalarOverlay(m_session.overlay, &error)) {
                 services->setSurfaceScalarProbeEnabled(
-                    m_session.showThickness && m_session.thicknessPickEnabled,
+                    m_session.showThickness,
                     m_session.objectId);
             } else {
                 m_status = error;
@@ -1742,59 +339,14 @@ namespace robot_qt_viewer
     void CoatingAnalysisModuleController::refreshViewModel()
     {
         CoatingAnalysisViewModel viewModel;
-        for(const simulation_project::SceneObjectDesc& object : m_context.document().objects) {
-            if(object.objectType != "workpiece") {
-                continue;
-            }
-            CoatingAnalysisWorkpieceItem item;
-            item.id = QString::fromStdString(object.id);
-            item.name = QString::fromStdString(
-                object.name.empty() ? object.id : object.name);
-            viewModel.workpieces.push_back(std::move(item));
-        }
-        viewModel.selectedWorkpieceId = m_session.objectId;
         viewModel.hasModel = !m_session.objectId.isEmpty();
         viewModel.modelName = viewModel.hasModel
             ? m_session.modelName
             : QStringLiteral("No model loaded");
         viewModel.modelPath = m_session.sourcePath;
-        viewModel.hasTrajectory = !m_session.trajectory.empty();
-        viewModel.trajectoryName = viewModel.hasTrajectory
-            ? m_session.trajectoryName
-            : QStringLiteral("No trajectory loaded");
-        viewModel.trajectoryPath = m_session.trajectoryPath;
         viewModel.status = m_status;
         viewModel.hasResult = m_session.hasResult;
-        viewModel.predictionRunning = m_predictionJob->isRunning();
-        viewModel.localMode = m_panel.periodicLocalPredictionEnabled();
-        viewModel.axisymmetricProfileMode =
-            m_panel.axisymmetricProfilePredictionEnabled();
-        viewModel.hasEffectiveRotationAxis = hasEffectiveRotationAxis();
-        viewModel.hasAxisymmetricProfileSelection =
-            m_axisymmetricProfile->reduction.valid();
-        viewModel.rotationAxisSource = rotationAxisSource();
-        viewModel.canStartPrediction = viewModel.hasModel && viewModel.hasTrajectory
-            && (!viewModel.localMode || viewModel.hasEffectiveRotationAxis)
-            && (!viewModel.axisymmetricProfileMode
-                || (viewModel.hasEffectiveRotationAxis
-                    && viewModel.hasAxisymmetricProfileSelection));
-        viewModel.canPreviewLocalInputs = viewModel.hasModel && viewModel.hasTrajectory
-            && viewModel.hasEffectiveRotationAxis;
-        viewModel.canSelectProfileRegion = viewModel.hasModel
-            && viewModel.hasEffectiveRotationAxis
-            && viewModel.axisymmetricProfileMode;
-        viewModel.hasLocalPreview = m_hasLocalPreview;
-        viewModel.localPreviewDetails = m_localPreviewDetails;
-        viewModel.axisymmetricProfileDetails = m_axisymmetricProfile->details;
-        viewModel.showCylindricalSurface = m_showCylindricalSurface;
-        viewModel.showRotationAxis = m_showRotationAxis;
-        viewModel.showLocalSector = m_showLocalSector;
-        viewModel.showLocalSprayPoints = m_showLocalSprayPoints;
-        viewModel.progress = m_predictionProgress;
-        viewModel.showModel = m_session.showModel;
-        viewModel.showSprayPoints = m_session.showSprayPoints;
         viewModel.showThickness = m_session.showThickness;
-        viewModel.thicknessPickEnabled = m_session.thicknessPickEnabled;
         viewModel.hasCurrentThickness = m_hasCurrentThickness;
         viewModel.currentMicrometers = m_currentThicknessMeters * kMetersToMicrometers;
         if(m_session.hasResult) {
@@ -1808,51 +360,6 @@ namespace robot_qt_viewer
                 m_session.prediction.metrics.averageThickness * kMetersToMicrometers;
         }
         m_panel.applyViewModel(viewModel);
-
-        CoatingAnalysisTreeView treeView;
-        treeView.trajectoryName = m_session.trajectoryName;
-        treeView.trajectoryInfo = m_session.trajectoryInfo;
-        treeView.workpieces = viewModel.workpieces;
-        treeView.selectedWorkpieceId = m_session.objectId;
-        treeView.showModel = m_session.showModel;
-        treeView.hasThickness = m_session.hasResult;
-        if(m_session.hasResult) {
-            treeView.thicknessMetrics = m_session.prediction.metrics;
-        }
-        for(const CoatingAnalysisWorkpieceItem& item : viewModel.workpieces) {
-            const bool visible = m_modelVisibility.contains(item.id)
-                ? m_modelVisibility.value(item.id)
-                : (item.id == m_session.objectId && m_session.showModel);
-            treeView.modelVisibility.insert(item.id, visible);
-        }
-        m_treePanel.applyTreeView(treeView);
-
-        CoatingAnalysisInfoView infoView;
-        infoView.hasModel = viewModel.hasModel;
-        infoView.modelName = m_session.modelName;
-        infoView.modelPath = m_session.sourcePath;
-        infoView.modelInfo = m_session.modelInfo;
-        infoView.hasTrajectory = viewModel.hasTrajectory;
-        infoView.trajectoryName = m_session.trajectoryName;
-        infoView.trajectoryInfo = m_session.trajectoryInfo;
-        infoView.hasThickness = m_session.hasResult;
-        infoView.predictionElapsedSeconds = m_session.predictionElapsedSeconds;
-        if(m_session.hasResult) {
-            infoView.thicknessMetrics = m_session.prediction.metrics;
-            infoView.predictionTiming = m_session.prediction.timing;
-        }
-        m_infoPanel.applyInfo(infoView);
-
-        CoatingAnalysisVisibilityView visibilityView;
-        visibilityView.hasModel = viewModel.hasModel;
-        visibilityView.hasTrajectory = viewModel.hasTrajectory;
-        visibilityView.hasThickness = m_session.hasResult;
-        visibilityView.showModel = m_session.showModel;
-        visibilityView.showSprayPoints = m_session.showSprayPoints;
-        visibilityView.showThickness = m_session.showThickness;
-        visibilityView.thicknessPickEnabled = m_session.thicknessPickEnabled;
-        m_visibilityBar.applyVisibility(visibilityView);
-
         emit thicknessLegendChanged(
             m_active && viewModel.hasResult,
             viewModel.minimumMicrometers,
@@ -1872,218 +379,5 @@ namespace robot_qt_viewer
         m_context.documentController().publishCoatingAnalysisChanged(
             payload,
             QStringLiteral("coatingAnalysis"));
-    }
-
-    void CoatingAnalysisModuleController::handleWaypointInfoRequested(int index)
-    {
-        if(index < 0 || index >= static_cast<int>(m_session.waypoints.size())) {
-            return;
-        }
-        CoatingAnalysisWaypointDialog dialog(&m_treePanel);
-        dialog.setWaypoint(
-            m_session.waypoints[static_cast<std::size_t>(index)],
-            static_cast<std::size_t>(index),
-            waypointDurationAt(static_cast<std::size_t>(index)));
-        dialog.exec();
-    }
-
-    void CoatingAnalysisModuleController::handleModelVisibilityToggleRequested(
-        const QString& objectId)
-    {
-        if(objectId.isEmpty()) {
-            return;
-        }
-        const bool defaultVisible =
-            objectId == m_session.objectId && m_session.showModel;
-        const bool current = m_modelVisibility.contains(objectId)
-            ? m_modelVisibility.value(objectId)
-            : defaultVisible;
-        const bool newVisible = !current;
-        m_modelVisibility[objectId] = newVisible;
-        applyModelVisibilityOverrides();
-
-        const simulation_project::SceneObjectDesc* object =
-            findObject(m_context.document(), objectId);
-        const QString name = object != nullptr && !object->name.empty()
-            ? QString::fromStdString(object->name)
-            : objectId;
-        m_status = newVisible
-            ? QStringLiteral("Model shown: %1").arg(name)
-            : QStringLiteral("Model hidden: %1").arg(name);
-        refreshViewModel();
-    }
-
-    void CoatingAnalysisModuleController::handleModelSetAsWorkpiece(const QString& objectId)
-    {
-        selectWorkpiece(objectId);
-    }
-
-    void CoatingAnalysisModuleController::handleThicknessClearRequested()
-    {
-        if(!m_session.hasResult) {
-            return;
-        }
-        if(RobotQtViewerViewportServices* services = m_context.viewportServices()) {
-            services->setSurfaceScalarProbeEnabled(false, QString());
-            services->clearSurfaceScalarOverlay(m_session.objectId);
-        }
-        m_session.clearResult();
-        m_hasCurrentThickness = false;
-        emit thicknessToolTipRequested(QString(), QPoint(), false);
-        m_status = QStringLiteral("Thickness result cleared.");
-        refreshViewModel();
-        publishStateChanged();
-    }
-
-    void CoatingAnalysisModuleController::handleRotationSurfacePicked(
-        const QString& objectId,
-        std::uint32_t triangleIndex,
-        double hitX,
-        double hitY,
-        double hitZ,
-        double normalX,
-        double normalY,
-        double normalZ)
-    {
-        const auto pickStartedAt = std::chrono::steady_clock::now();
-        (void)hitX;
-        (void)hitY;
-        (void)hitZ;
-        (void)normalX;
-        (void)normalY;
-        (void)normalZ;
-        if(m_predictionJob->isRunning()) {
-            return;
-        }
-        const simulation_project::SceneObjectDesc* object =
-            findObject(m_context.document(), objectId);
-        if(object == nullptr || object->objectType != "workpiece") {
-            m_status = QStringLiteral("The picked object is not a workpiece.");
-            refreshViewModel();
-            return;
-        }
-        if(objectId != m_session.objectId) {
-            selectWorkpiece(objectId);
-        }
-
-        const std::filesystem::path sourcePath = simulation_project::AssetResolver::resolveProjectPath(
-            makeResolveContext(m_context.projectSession()),
-            object->sourcePath);
-        std::string loadError;
-        const std::shared_ptr<assetcore::ModelDesc> model =
-            assetcore::AssetManager::instance().tryLoadModel(
-                sourcePath.generic_u8string(),
-                static_cast<float>(object->visualScale),
-                &loadError);
-        if(!model) {
-            m_status = QString::fromStdString(loadError.empty()
-                ? "Failed to load the selected workpiece mesh."
-                : loadError);
-            refreshViewModel();
-            return;
-        }
-
-        try {
-            const auto meshBuildStartedAt = std::chrono::steady_clock::now();
-            const PaintingAnalysisMeshData mesh = PaintingAnalysisMeshAdapter::build(
-                *model,
-                object->name,
-                sourcePath.generic_u8string(),
-                makeTransform(object->transform));
-            const double meshBuildMilliseconds = elapsedMilliseconds(meshBuildStartedAt);
-
-            // Show the exact picked face immediately. This keeps the selection
-            // step observable even when the subsequent cylindrical fit fails.
-            if(RobotQtViewerViewportServices* services = m_context.viewportServices()) {
-                services->setCoatingPredictionDebugState(
-                    makeSeedDebugState(mesh, static_cast<std::size_t>(triangleIndex)));
-            }
-            const auto fitStartedAt = std::chrono::steady_clock::now();
-            const spraythickness::CylindricalSurfaceFitResult fit =
-                spraythickness::fitCylindricalSurface(mesh.workpiece, triangleIndex);
-            const double fitMilliseconds = elapsedMilliseconds(fitStartedAt);
-            LOG_DEBUG("rs2026") << "Rotation surface fit: object="
-                << objectId.toStdString()
-                << ", triangle=" << triangleIndex
-                << ", meshBuildMs=" << meshBuildMilliseconds
-                << ", fitMs=" << fitMilliseconds
-                << ", totalMs=" << elapsedMilliseconds(pickStartedAt)
-                << ", selectedTriangles=" << fit.triangleCount
-                << ", valid=" << fit.valid()
-                << ", failure=" << fit.failureReason;
-            if(!fit.valid()) {
-                m_hasRotationAxis = false;
-                m_rotationPreviewWorkpiece = sprayworkpiece::WorkpieceModel();
-                m_rotationSurfaceTriangleIndices.clear();
-                m_rotationSeedTriangleIndex = 0;
-                m_rotationFitElapsedMilliseconds = fitMilliseconds;
-                m_hasLocalPreview = false;
-                m_localPreviewDetails.clear();
-                clearAxisymmetricProfileSelection();
-                m_status = QStringLiteral("Cylindrical fit failed: %1")
-                    .arg(QString::fromStdString(fit.failureReason));
-                if(RobotQtViewerViewportServices* services = m_context.viewportServices()) {
-                    services->clearCoatingPredictionDebugState();
-                }
-                applyModelVisibilityOverrides();
-                refreshViewModel();
-                return;
-            }
-            m_hasRotationAxis = true;
-            m_rotationAxisOrigin = fit.axisOrigin;
-            m_rotationAxisDirection = fit.axisDirection;
-            m_rotationPreviewWorkpiece = mesh.workpiece;
-            m_rotationSurfaceTriangleIndices = fit.selectedTriangleIndices;
-            m_rotationSeedTriangleIndex = fit.seedTriangleIndex;
-            m_rotationFitElapsedMilliseconds = fitMilliseconds;
-            m_hasLocalPreview = false;
-            m_localPreviewDetails.clear();
-            clearAxisymmetricProfileSelection();
-            const bool modeWasAlreadyLocal = m_panel.periodicLocalPredictionEnabled();
-            const bool modeWasAlreadyProfile =
-                m_panel.axisymmetricProfilePredictionEnabled();
-            if(RobotQtViewerViewportServices* services = m_context.viewportServices()) {
-                services->setCoatingPredictionDebugState(
-                    makeRotationFitDebugState(mesh, fit));
-            }
-            if(!modeWasAlreadyLocal && !modeWasAlreadyProfile) {
-                m_panel.setPeriodicLocalPredictionEnabled(true);
-            }
-            if(modeWasAlreadyLocal || modeWasAlreadyProfile) {
-                applyModelVisibilityOverrides();
-            }
-            if(modeWasAlreadyLocal && !m_session.trajectory.empty()) {
-                previewLocalInputs();
-            } else if(modeWasAlreadyProfile) {
-                if(ensureAxisymmetricProfileSlice()) {
-                    updateAxisymmetricProfileDebugState();
-                    m_status = QStringLiteral(
-                        "Rotation axis updated. Select the profile prediction region again.");
-                }
-                refreshViewModel();
-            } else if(m_session.trajectory.empty()) {
-                m_status = QStringLiteral(
-                    "Axis fitted: dir=(%1, %2, %3), R=%4 mm, faces=%5, RMS=%6 mm, fit=%7 ms")
-                    .arg(fit.axisDirection.x(), 0, 'f', 4)
-                    .arg(fit.axisDirection.y(), 0, 'f', 4)
-                    .arg(fit.axisDirection.z(), 0, 'f', 4)
-                    .arg(fit.radius * 1000.0, 0, 'f', 3)
-                    .arg(static_cast<qulonglong>(fit.triangleCount))
-                    .arg(fit.rmsRadialError * 1000.0, 0, 'f', 3)
-                    .arg(fitMilliseconds, 0, 'f', 1);
-                refreshViewModel();
-            }
-        } catch(const std::exception& exception) {
-            m_hasRotationAxis = false;
-            m_rotationPreviewWorkpiece = sprayworkpiece::WorkpieceModel();
-            m_rotationSurfaceTriangleIndices.clear();
-            m_rotationSeedTriangleIndex = 0;
-            m_rotationFitElapsedMilliseconds = 0.0;
-            m_hasLocalPreview = false;
-            m_localPreviewDetails.clear();
-            clearAxisymmetricProfileSelection();
-            m_status = QString::fromLocal8Bit(exception.what());
-            refreshViewModel();
-        }
     }
 }
