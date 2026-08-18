@@ -1,0 +1,8 @@
+cmake_minimum_required(VERSION 3.20)
+
+add_executable(PaintingAnalysisMeshAdapterTest main.cpp)
+target_link_libraries(PaintingAnalysisMeshAdapterTest
+    PRIVATE SMRobotWorkbenchPaintingAnalysis::PaintingAnalysisWorkbench)
+target_compile_features(PaintingAnalysisMeshAdapterTest PRIVATE cxx_std_17)
+set_target_properties(PaintingAnalysisMeshAdapterTest PROPERTIES FOLDER tests/SMRobotWorkbenchPaintingAnalysis)
+add_test(NAME PaintingAnalysisMeshAdapterTest COMMAND $<TARGET_FILE:PaintingAnalysisMeshAdapterTest>)
