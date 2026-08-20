@@ -38,6 +38,7 @@
 namespace
 {
     constexpr double kMetersToMicrometers = 1.0e6;
+    constexpr double kValidationActiveThicknessMeters = 1.0e-12;
     const QString kFixedModelPath = QStringLiteral(
         "K:/rs2026/data/ThickPredictData/STL/libing/yangjian_2_0.02.STL");
     const QString kFixedTrajectoryPath = QStringLiteral(
@@ -47,6 +48,36 @@ namespace
     {
         return std::chrono::duration<double, std::milli>(
             std::chrono::steady_clock::now() - start).count();
+    }
+
+    std::size_t activeThicknessCount(const spraythickness::ThicknessField& field)
+    {
+        return static_cast<std::size_t>(std::count_if(
+            field.results.begin(),
+            field.results.end(),
+            [](const spraythickness::ThicknessSampleResult& result) {
+                return std::abs(result.thickness) > kValidationActiveThicknessMeters;
+            }));
+    }
+
+    QString predictionModeName(robot_qt_viewer::PredictionInputMode mode)
+    {
+        using robot_qt_viewer::PredictionInputMode;
+        switch(mode) {
+        case PredictionInputMode::CompleteAllSprayPoints:
+            return QStringLiteral("Complete - all spray points");
+        case PredictionInputMode::LocalAllSprayPoints:
+            return QStringLiteral("Local - all spray points");
+        case PredictionInputMode::CompleteSpatialFilteredSprayPoints:
+            return QStringLiteral("Complete - spatial filtering");
+        case PredictionInputMode::LocalSpatialFilteredSprayPoints:
+            return QStringLiteral("Local - spatial filtering");
+        case PredictionInputMode::AxisymmetricProfileSpatialFilteredSprayPoints:
+            return QStringLiteral("Axisymmetric profile - spatial filtering");
+        case PredictionInputMode::CompleteSpatialFilteredCandidateVertices:
+            return QStringLiteral("Complete - candidate vertices");
+        }
+        return QStringLiteral("Unknown");
     }
 
     const simulation_project::SceneObjectDesc* findObject(
@@ -307,6 +338,12 @@ namespace robot_qt_viewer
             this, &CoatingAnalysisModuleController::predictThickness);
         connect(&m_panel, &CoatingAnalysisPanel::cancelPredictionRequested,
             this, &CoatingAnalysisModuleController::cancelPrediction);
+        connect(&m_panel, &CoatingAnalysisPanel::setReferenceRequested,
+            this, &CoatingAnalysisModuleController::setCurrentResultAsReference);
+        connect(&m_panel, &CoatingAnalysisPanel::clearReferenceRequested,
+            this, &CoatingAnalysisModuleController::clearReferenceResult);
+        connect(&m_panel, &CoatingAnalysisPanel::checkReferenceRequested,
+            this, &CoatingAnalysisModuleController::checkCurrentResultAgainstReference);
         connect(&m_panel, &CoatingAnalysisPanel::localInputPreviewRequested,
             this, &CoatingAnalysisModuleController::previewLocalInputs);
         connect(&m_panel, &CoatingAnalysisPanel::profileRegionSelectionRequested,
@@ -426,6 +463,209 @@ namespace robot_qt_viewer
                 refreshViewModel();
             });
         refreshViewModel();
+    }
+
+    void CoatingAnalysisModuleController::resetReferenceResult()
+    {
+        m_referenceThickness = spraythickness::ThicknessField();
+        m_referenceActiveVertexCount = 0;
+        m_validationDetails = QStringLiteral("No reference result.");
+    }
+
+    void CoatingAnalysisModuleController::setCurrentResultAsReference()
+    {
+        if(m_predictionJob->isRunning()) {
+            return;
+        }
+        if(!m_session.hasResult || m_session.prediction.field.empty()) {
+            m_status = QStringLiteral("Run a prediction before setting a reference.");
+            refreshViewModel();
+            return;
+        }
+
+        m_referenceThickness = m_session.prediction.field;
+        m_referenceActiveVertexCount = activeThicknessCount(m_referenceThickness);
+        m_validationDetails = QStringLiteral(
+            "Reference ready\n"
+            "Mode       : %1\n"
+            "Vertices   : %2\n"
+            "Active     : %3")
+            .arg(predictionModeName(m_panel.predictionInputMode()))
+            .arg(static_cast<qulonglong>(m_referenceThickness.results.size()))
+            .arg(static_cast<qulonglong>(m_referenceActiveVertexCount));
+        m_status = QStringLiteral("Current prediction stored as the reference result.");
+        refreshViewModel();
+        emit statusMessageRequested(m_status, 3000);
+    }
+
+    void CoatingAnalysisModuleController::clearReferenceResult()
+    {
+        if(m_predictionJob->isRunning() || m_referenceThickness.empty()) {
+            return;
+        }
+        resetReferenceResult();
+        if(m_session.showRelativeError) {
+            m_session.overlay = m_session.thicknessOverlay;
+            m_session.showRelativeError = false;
+            if(RobotQtViewerViewportServices* services = m_context.viewportServices()) {
+                QString error;
+                services->applySurfaceScalarOverlay(m_session.overlay, &error);
+            }
+        }
+        m_status = QStringLiteral("Reference result cleared.");
+        refreshViewModel();
+        emit statusMessageRequested(m_status, 3000);
+    }
+
+    void CoatingAnalysisModuleController::checkCurrentResultAgainstReference()
+    {
+        if(m_predictionJob->isRunning()) {
+            return;
+        }
+        if(m_referenceThickness.empty()) {
+            m_status = QStringLiteral("Set a reference result before checking this prediction.");
+            refreshViewModel();
+            return;
+        }
+        if(!m_session.hasResult || m_session.prediction.field.empty()) {
+            m_status = QStringLiteral("Run prediction before checking it against the reference.");
+            refreshViewModel();
+            return;
+        }
+
+        const spraythickness::ThicknessField& current = m_session.prediction.field;
+        if(current.results.size() != m_referenceThickness.results.size()) {
+            m_validationDetails = QStringLiteral(
+                "Validation unavailable\n"
+                "Reference vertices: %1\n"
+                "Current vertices  : %2\n"
+                "The optimized result was not mapped to the complete model.")
+                .arg(static_cast<qulonglong>(m_referenceThickness.results.size()))
+                .arg(static_cast<qulonglong>(current.results.size()));
+            m_status = QStringLiteral("Validation stopped: complete-model vertex counts differ.");
+            refreshViewModel();
+            emit statusMessageRequested(m_status, 5000);
+            return;
+        }
+
+        std::vector<double> absoluteErrors;
+        absoluteErrors.reserve(current.results.size());
+        std::size_t referenceActive = 0;
+        std::size_t currentActive = 0;
+        std::size_t commonActive = 0;
+        std::size_t missingReference = 0;
+        std::size_t currentOnly = 0;
+        double absoluteErrorSum = 0.0;
+        double squaredErrorSum = 0.0;
+        double maximumAbsoluteError = 0.0;
+        double maximumRelativeError = 0.0;
+
+        for(std::size_t index = 0; index < current.results.size(); ++index) {
+            const spraythickness::ThicknessSampleResult& reference =
+                m_referenceThickness.results[index];
+            const spraythickness::ThicknessSampleResult& candidate = current.results[index];
+            if(reference.sampleIndex != candidate.sampleIndex) {
+                m_validationDetails = QStringLiteral(
+                    "Validation unavailable\n"
+                    "Vertex index mapping differs at result index %1.")
+                    .arg(static_cast<qulonglong>(index));
+                m_status = QStringLiteral("Validation stopped: vertex index mapping differs.");
+                refreshViewModel();
+                emit statusMessageRequested(m_status, 5000);
+                return;
+            }
+
+            const bool referenceHasThickness =
+                std::abs(reference.thickness) > kValidationActiveThicknessMeters;
+            const bool candidateHasThickness =
+                std::abs(candidate.thickness) > kValidationActiveThicknessMeters;
+            referenceActive += referenceHasThickness ? 1 : 0;
+            currentActive += candidateHasThickness ? 1 : 0;
+            if(!candidateHasThickness && referenceHasThickness) {
+                ++missingReference;
+            }
+
+            currentOnly += !referenceHasThickness && candidateHasThickness ? 1 : 0;
+            if(referenceHasThickness && candidateHasThickness) {
+                ++commonActive;
+            }
+
+            // Compare every complete-model vertex, including vertices whose
+            // reference or candidate thickness is zero. Active counts above
+            // remain coverage diagnostics only.
+            const double absoluteError = std::abs(candidate.thickness - reference.thickness);
+            absoluteErrors.push_back(absoluteError);
+            absoluteErrorSum += absoluteError;
+            squaredErrorSum += absoluteError * absoluteError;
+            maximumAbsoluteError = std::max(maximumAbsoluteError, absoluteError);
+            maximumRelativeError = std::max(
+                maximumRelativeError,
+                absoluteError / std::max(
+                    std::abs(reference.thickness),
+                    kValidationActiveThicknessMeters));
+        }
+
+        std::sort(absoluteErrors.begin(), absoluteErrors.end());
+        const std::size_t p95Index = static_cast<std::size_t>(std::ceil(
+            static_cast<double>(absoluteErrors.size()) * 0.95)) - 1;
+        const double p95AbsoluteError = absoluteErrors[p95Index];
+        const std::size_t comparisonCount = current.results.size();
+        const double meanAbsoluteError = absoluteErrorSum
+            / static_cast<double>(comparisonCount);
+        const double rootMeanSquareError = std::sqrt(
+            squaredErrorSum / static_cast<double>(comparisonCount));
+        m_validationDetails = QStringLiteral(
+            "Validation complete\n"
+            "Compared vertices : %1 (all)\n"
+            "Reference active : %2\n"
+            "Current active   : %3\n"
+            "Common active   : %4\n"
+            "Missing reference: %5\n"
+            "Current-only    : %6\n"
+            "MAE (all)       : %7 um\n"
+            "RMSE (all)      : %8 um\n"
+            "P95 abs error   : %9 um\n"
+            "Max abs error   : %10 um\n"
+            "Max relative err: %11%")
+            .arg(static_cast<qulonglong>(comparisonCount))
+            .arg(static_cast<qulonglong>(referenceActive))
+            .arg(static_cast<qulonglong>(currentActive))
+            .arg(static_cast<qulonglong>(commonActive))
+            .arg(static_cast<qulonglong>(missingReference))
+            .arg(static_cast<qulonglong>(currentOnly))
+            .arg(meanAbsoluteError * kMetersToMicrometers, 0, 'g', 6)
+            .arg(rootMeanSquareError * kMetersToMicrometers, 0, 'g', 6)
+            .arg(p95AbsoluteError * kMetersToMicrometers, 0, 'g', 6)
+            .arg(maximumAbsoluteError * kMetersToMicrometers, 0, 'g', 6)
+            .arg(maximumRelativeError * 100.0, 0, 'g', 6);
+        m_status = QStringLiteral("Validation completed for %1 vertices.")
+            .arg(static_cast<qulonglong>(comparisonCount));
+        try {
+            smrobot::visualization::SurfaceScalarOverlay errorOverlay =
+                PaintingAnalysisMeshAdapter::makeRelativeErrorOverlay(
+                    m_session.objectId.toStdString(),
+                    m_session.binding,
+                    m_referenceThickness,
+                    current);
+            if(RobotQtViewerViewportServices* services = m_context.viewportServices()) {
+                QString applyError;
+                if(!services->applySurfaceScalarOverlay(errorOverlay, &applyError)) {
+                    m_status = applyError.isEmpty()
+                        ? QStringLiteral("Validation completed, but the error cloud could not be displayed.")
+                        : applyError;
+                } else {
+                    m_session.overlay = std::move(errorOverlay);
+                    m_session.showRelativeError = true;
+                    m_session.showThickness = true;
+                    services->setCoatingModelVisible(m_session.objectId, true);
+                    services->setSurfaceScalarOverlayVisible(m_session.objectId, true);
+                }
+            }
+        } catch(const std::exception& exception) {
+            m_status = QString::fromLocal8Bit(exception.what());
+        }
+        refreshViewModel();
+        emit statusMessageRequested(m_status, 5000);
     }
 
     bool CoatingAnalysisModuleController::ensurePreviewWorkpieceLoaded()
@@ -645,12 +885,19 @@ namespace robot_qt_viewer
 
         m_hasCurrentThickness = true;
         m_currentThicknessMeters = valueMeters;
-        const QString text = QStringLiteral(
-            "Vertex\nX: %1 mm\nY: %2 mm\nZ: %3 mm\nThickness: %4 um")
-            .arg(worldX * 1000.0, 0, 'f', 3)
-            .arg(worldY * 1000.0, 0, 'f', 3)
-            .arg(worldZ * 1000.0, 0, 'f', 3)
-            .arg(valueMeters * kMetersToMicrometers, 0, 'f', 2);
+        const QString text = m_session.showRelativeError
+            ? QStringLiteral(
+                "Vertex\nX: %1 mm\nY: %2 mm\nZ: %3 mm\nRelative error: %4%")
+                .arg(worldX * 1000.0, 0, 'f', 3)
+                .arg(worldY * 1000.0, 0, 'f', 3)
+                .arg(worldZ * 1000.0, 0, 'f', 3)
+                .arg(valueMeters, 0, 'f', 2)
+            : QStringLiteral(
+                "Vertex\nX: %1 mm\nY: %2 mm\nZ: %3 mm\nThickness: %4 um")
+                .arg(worldX * 1000.0, 0, 'f', 3)
+                .arg(worldY * 1000.0, 0, 'f', 3)
+                .arg(worldZ * 1000.0, 0, 'f', 3)
+                .arg(valueMeters * kMetersToMicrometers, 0, 'f', 2);
         emit thicknessToolTipRequested(text, viewportPosition, true);
         refreshViewModel();
     }
@@ -696,6 +943,7 @@ namespace robot_qt_viewer
         }
         emit thicknessToolTipRequested(QString(), QPoint(), false);
         m_session.clear();
+        resetReferenceResult();
         m_hasCurrentThickness = false;
         publishStateChanged();
 
@@ -724,6 +972,7 @@ namespace robot_qt_viewer
         }
 
         m_session.clear();
+        resetReferenceResult();
         m_hasRotationAxis = false;
         m_rotationPreviewWorkpiece = sprayworkpiece::WorkpieceModel();
         m_rotationSurfaceTriangleIndices.clear();
@@ -816,6 +1065,7 @@ namespace robot_qt_viewer
             }
         }
         m_session.clearResult();
+        resetReferenceResult();
         m_session.trajectory = loadResult.trajectory;
         m_session.waypoints = loadResult.trajectory.flattenedPoints();
         m_hasLocalPreview = false;
@@ -926,6 +1176,8 @@ namespace robot_qt_viewer
                 m_panel.axisymmetricProfilePredictionEnabled();
             task.options.spatialFiltering.enabled =
                 m_panel.spatialInfluenceFilteringEnabled();
+            task.options.spatialFiltering.filterCandidateVertices =
+                m_panel.spatialCandidateVertexFilteringEnabled();
             task.options.spatialFiltering.overrideGridCellSize =
                 m_panel.overrideSpatialGridCellSize();
             task.options.spatialFiltering.gridCellSizeMeters =
@@ -1293,7 +1545,9 @@ namespace robot_qt_viewer
         m_predictionProgress = std::clamp(progress, 0.0, 1.0);
         m_status = message;
         if(message.contains(QStringLiteral("Spatial grid ready:"))
-            || message.contains(QStringLiteral("Spatial grid cache hit:"))) {
+            || message.contains(QStringLiteral("Spatial grid cache hit:"))
+            || message.contains(QStringLiteral("Axisymmetric mapping built"))
+            || message.contains(QStringLiteral("Axisymmetric mapping cache hit"))) {
             LOG_DEBUG("rs2026") << message.toStdString();
         }
         refreshViewModel();
@@ -1355,7 +1609,9 @@ namespace robot_qt_viewer
             }
 
             m_session.prediction = prediction;
+            m_session.thicknessOverlay = overlay;
             m_session.overlay = std::move(overlay);
+            m_session.showRelativeError = false;
             m_session.predictionElapsedSeconds = elapsedSeconds;
             m_session.hasResult = true;
             m_session.showThickness = true;
@@ -1488,6 +1744,7 @@ namespace robot_qt_viewer
             }
         }
         m_session.clearResult();
+        resetReferenceResult();
         m_session.objectId = objectId;
         m_session.modelName = QString::fromStdString(object->name);
         m_session.sourcePath = QString::fromStdString(object->sourcePath);
@@ -1622,6 +1879,7 @@ namespace robot_qt_viewer
     void CoatingAnalysisModuleController::clearSession()
     {
         m_predictionJob->cancel();
+        resetReferenceResult();
         m_predictionObjectId.clear();
         m_predictionProgress = 0.0;
         m_predictionTimerActive = false;
@@ -1797,11 +2055,23 @@ namespace robot_qt_viewer
         viewModel.thicknessPickEnabled = m_session.thicknessPickEnabled;
         viewModel.hasCurrentThickness = m_hasCurrentThickness;
         viewModel.currentMicrometers = m_currentThicknessMeters * kMetersToMicrometers;
+        viewModel.referenceAvailable = !m_referenceThickness.empty();
+        viewModel.canSetReference = viewModel.hasResult;
+        viewModel.canClearReference = viewModel.referenceAvailable;
+        viewModel.canCheckReference = viewModel.hasResult && viewModel.referenceAvailable;
+        viewModel.referenceStatus = viewModel.referenceAvailable
+            ? QStringLiteral("Reference: ready (%1 active vertices)")
+                  .arg(static_cast<qulonglong>(m_referenceActiveVertexCount))
+            : QStringLiteral("Reference: not set");
         if(m_session.hasResult) {
             viewModel.minimumMicrometers =
-                m_session.prediction.metrics.minThickness * kMetersToMicrometers;
+                m_session.showRelativeError
+                ? m_session.overlay.range.minimum
+                : m_session.prediction.metrics.minThickness * kMetersToMicrometers;
             viewModel.maximumMicrometers =
-                m_session.prediction.metrics.maxThickness * kMetersToMicrometers;
+                m_session.showRelativeError
+                ? m_session.overlay.range.maximum
+                : m_session.prediction.metrics.maxThickness * kMetersToMicrometers;
             viewModel.midpointMicrometers =
                 (viewModel.minimumMicrometers + viewModel.maximumMicrometers) * 0.5;
             viewModel.averageMicrometers =
@@ -1837,6 +2107,7 @@ namespace robot_qt_viewer
         infoView.trajectoryInfo = m_session.trajectoryInfo;
         infoView.hasThickness = m_session.hasResult;
         infoView.predictionElapsedSeconds = m_session.predictionElapsedSeconds;
+        infoView.validationDetails = m_validationDetails;
         if(m_session.hasResult) {
             infoView.thicknessMetrics = m_session.prediction.metrics;
             infoView.predictionTiming = m_session.prediction.timing;
@@ -1856,7 +2127,8 @@ namespace robot_qt_viewer
         emit thicknessLegendChanged(
             m_active && viewModel.hasResult,
             viewModel.minimumMicrometers,
-            viewModel.maximumMicrometers);
+            viewModel.maximumMicrometers,
+            m_session.showRelativeError);
     }
 
     void CoatingAnalysisModuleController::publishStateChanged()

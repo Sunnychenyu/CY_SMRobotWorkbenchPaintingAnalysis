@@ -46,6 +46,12 @@ namespace robot_qt_viewer
             update();
         }
 
+        void selectEntireProfile()
+        {
+            m_selectionRectangle = plotRectangle();
+            update();
+        }
+
     protected:
         void paintEvent(QPaintEvent*) override
         {
@@ -120,10 +126,10 @@ namespace robot_qt_viewer
 
         void mousePressEvent(QMouseEvent* event) override
         {
-            if(event->button() != Qt::LeftButton || !plotRectangle().contains(event->pos())) {
+            if(event->button() != Qt::LeftButton) {
                 return;
             }
-            m_dragStart = event->pos();
+            m_dragStart = clampToPlot(event->pos());
             m_selectionRectangle = QRectF(m_dragStart, m_dragStart);
             m_dragging = true;
             update();
@@ -134,8 +140,8 @@ namespace robot_qt_viewer
             if(!m_dragging) {
                 return;
             }
-            m_selectionRectangle = QRectF(m_dragStart, event->pos()).normalized()
-                .intersected(plotRectangle());
+            m_selectionRectangle = QRectF(m_dragStart, clampToPlot(event->pos()))
+                .normalized();
             update();
         }
 
@@ -143,8 +149,8 @@ namespace robot_qt_viewer
         {
             if(event->button() == Qt::LeftButton && m_dragging) {
                 m_dragging = false;
-                m_selectionRectangle = QRectF(m_dragStart, event->pos()).normalized()
-                    .intersected(plotRectangle());
+                m_selectionRectangle = QRectF(m_dragStart, clampToPlot(event->pos()))
+                    .normalized();
                 update();
             }
         }
@@ -195,13 +201,36 @@ namespace robot_qt_viewer
                 std::max(1, width() - 68), std::max(1, height() - 58));
         }
 
+        Eigen::Vector2d displayMinimum() const
+        {
+            const Eigen::Vector2d span = (m_slice.maximum - m_slice.minimum).cwiseMax(
+                Eigen::Vector2d::Constant(1.0e-9));
+            return m_slice.minimum - 0.08 * span;
+        }
+
+        Eigen::Vector2d displayMaximum() const
+        {
+            const Eigen::Vector2d span = (m_slice.maximum - m_slice.minimum).cwiseMax(
+                Eigen::Vector2d::Constant(1.0e-9));
+            return m_slice.maximum + 0.08 * span;
+        }
+
+        QPointF clampToPlot(const QPointF& point) const
+        {
+            const QRectF plot = plotRectangle();
+            return QPointF(
+                std::clamp(point.x(), plot.left(), plot.right()),
+                std::clamp(point.y(), plot.top(), plot.bottom()));
+        }
+
         QPointF sectionToScreen(const Eigen::Vector2d& point) const
         {
             const QRectF plot = plotRectangle();
-            const Eigen::Vector2d span = (m_slice.maximum - m_slice.minimum).cwiseMax(
+            const Eigen::Vector2d minimum = displayMinimum();
+            const Eigen::Vector2d span = (displayMaximum() - minimum).cwiseMax(
                 Eigen::Vector2d::Constant(1.0e-9));
-            const double x = (point.x() - m_slice.minimum.x()) / span.x();
-            const double y = (point.y() - m_slice.minimum.y()) / span.y();
+            const double x = (point.x() - minimum.x()) / span.x();
+            const double y = (point.y() - minimum.y()) / span.y();
             return QPointF(plot.left() + x * plot.width(),
                 plot.bottom() - y * plot.height());
         }
@@ -209,12 +238,17 @@ namespace robot_qt_viewer
         Eigen::Vector2d screenToSection(const QPointF& point) const
         {
             const QRectF plot = plotRectangle();
-            const Eigen::Vector2d span = m_slice.maximum - m_slice.minimum;
+            const Eigen::Vector2d minimum = displayMinimum();
+            const Eigen::Vector2d maximum = displayMaximum();
+            const Eigen::Vector2d span = maximum - minimum;
             const double x = std::clamp((point.x() - plot.left()) / plot.width(), 0.0, 1.0);
             const double y = std::clamp((plot.bottom() - point.y()) / plot.height(), 0.0, 1.0);
-            return Eigen::Vector2d(
-                m_slice.minimum.x() + x * span.x(),
-                m_slice.minimum.y() + y * span.y());
+            const Eigen::Vector2d sectionPoint(
+                minimum.x() + x * span.x(),
+                minimum.y() + y * span.y());
+            const Eigen::Vector2d sectionMinimum = m_slice.minimum.cwiseMin(m_slice.maximum);
+            const Eigen::Vector2d sectionMaximum = m_slice.minimum.cwiseMax(m_slice.maximum);
+            return sectionPoint.cwiseMax(sectionMinimum).cwiseMin(sectionMaximum);
         }
 
         const spraythickness::opengl::AxisymmetricProfileSlice& m_slice;
@@ -240,8 +274,12 @@ namespace robot_qt_viewer
         layout->addWidget(m_canvas, 1);
         auto* buttons = new QDialogButtonBox(
             QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
+        QPushButton* selectAllButton = buttons->addButton(
+            QStringLiteral("Select entire profile"), QDialogButtonBox::ActionRole);
         QPushButton* clearButton = buttons->addButton(
             QStringLiteral("Clear selection"), QDialogButtonBox::ResetRole);
+        connect(selectAllButton, &QPushButton::clicked,
+            m_canvas, &ProfileCanvas::selectEntireProfile);
         connect(clearButton, &QPushButton::clicked, m_canvas, &ProfileCanvas::clearSelection);
         connect(buttons, &QDialogButtonBox::accepted, this, &QDialog::accept);
         connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);

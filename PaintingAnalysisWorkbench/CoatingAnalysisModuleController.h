@@ -79,7 +79,8 @@ namespace robot_qt_viewer
         void thicknessLegendChanged(
             bool visible,
             double minimumMicrometers,
-            double maximumMicrometers);
+            double maximumMicrometers,
+            bool relativeError);
 
     private:
         struct AxisymmetricProfileState;
@@ -88,6 +89,9 @@ namespace robot_qt_viewer
         bool loadTrajectory(const QString& path);
         void openTrajectoryFromDialog();
         void predictThickness();
+        void setCurrentResultAsReference();
+        void clearReferenceResult();
+        void checkCurrentResultAgainstReference();
         void previewLocalInputs();
         void selectAxisymmetricProfileRegion();
         void cancelPrediction();
@@ -126,6 +130,7 @@ namespace robot_qt_viewer
         void clearAxisymmetricProfileSelection();
         bool rebuildAxisymmetricProfileReduction();
         void updateAxisymmetricProfileDebugState();
+        void resetReferenceResult();
 
         void handleWaypointInfoRequested(int index);
         void handleModelVisibilityToggleRequested(const QString& objectId);
@@ -161,6 +166,9 @@ namespace robot_qt_viewer
         bool m_showLocalSprayPoints = true;
         std::chrono::steady_clock::time_point m_predictionStartedAt{};
         bool m_predictionTimerActive = false;
+        spraythickness::ThicknessField m_referenceThickness;
+        std::size_t m_referenceActiveVertexCount = 0;
+        QString m_validationDetails = QStringLiteral("No reference result.");
         std::vector<QString> m_modelVisibilityOverrideIds;
         QHash<QString, bool> m_modelVisibility;
     };

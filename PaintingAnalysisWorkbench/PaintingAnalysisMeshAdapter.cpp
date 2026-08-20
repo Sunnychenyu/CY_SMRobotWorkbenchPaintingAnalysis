@@ -1,5 +1,7 @@
 #include "PaintingAnalysisMeshAdapter.h"
 
+#include <algorithm>
+#include <cmath>
 #include <stdexcept>
 
 namespace robot_qt_viewer
@@ -119,6 +121,61 @@ namespace robot_qt_viewer
                     throw std::runtime_error("Thickness sample binding is out of range.");
                 }
                 values.push_back(prediction.field.results[sampleIndex].thickness);
+            }
+        }
+        return overlay;
+    }
+
+    smrobot::visualization::SurfaceScalarOverlay
+    PaintingAnalysisMeshAdapter::makeRelativeErrorOverlay(
+        const std::string& objectId,
+        const PaintingAnalysisMeshBinding& binding,
+        const spraythickness::ThicknessField& reference,
+        const spraythickness::ThicknessField& candidate)
+    {
+        constexpr double kReferenceFloorMeters = 1.0e-12;
+        constexpr double kRelativeErrorColorLimitPercent = 5.0;
+        smrobot::visualization::SurfaceScalarOverlay overlay;
+        overlay.objectId = objectId;
+        overlay.quantityName = "Relative error";
+        overlay.unit = "%";
+        overlay.range.minimum = 0.0;
+        overlay.range.maximum = kRelativeErrorColorLimitPercent;
+        overlay.colorMap = smrobot::visualization::ScalarColorMap({
+            { 0.000, Eigen::Vector3f(0.0f, 0.0f, 0.5f) },
+            { 0.125, Eigen::Vector3f(0.0f, 0.0f, 1.0f) },
+            { 0.250, Eigen::Vector3f(0.0f, 0.5f, 1.0f) },
+            { 0.375, Eigen::Vector3f(0.0f, 1.0f, 1.0f) },
+            { 0.500, Eigen::Vector3f(0.5f, 1.0f, 0.5f) },
+            { 0.625, Eigen::Vector3f(1.0f, 1.0f, 0.0f) },
+            { 0.750, Eigen::Vector3f(1.0f, 0.5f, 0.0f) },
+            { 0.875, Eigen::Vector3f(1.0f, 0.0f, 0.0f) },
+            { 1.000, Eigen::Vector3f(0.5f, 0.0f, 0.0f) }
+        });
+        overlay.subMeshes.resize(binding.sampleIndicesBySubMesh.size());
+
+        for(std::size_t subMeshIndex = 0;
+            subMeshIndex < binding.sampleIndicesBySubMesh.size();
+            ++subMeshIndex) {
+            const std::vector<std::size_t>& sampleIndices =
+                binding.sampleIndicesBySubMesh[subMeshIndex];
+            std::vector<double>& values = overlay.subMeshes[subMeshIndex].values;
+            values.reserve(sampleIndices.size());
+            for(const std::size_t sampleIndex : sampleIndices) {
+                if(sampleIndex >= reference.results.size()
+                    || sampleIndex >= candidate.results.size()) {
+                    throw std::runtime_error(
+                        "Relative error sample binding is out of range.");
+                }
+                const double referenceValue = reference.results[sampleIndex].thickness;
+                const double candidateValue = candidate.results[sampleIndex].thickness;
+                const double referenceMagnitude = std::abs(referenceValue);
+                const double absoluteError = std::abs(candidateValue - referenceValue);
+                const double relativeError = referenceMagnitude > kReferenceFloorMeters
+                    ? absoluteError / referenceMagnitude
+                    : (std::abs(candidateValue) > kReferenceFloorMeters ? 1.0 : 0.0);
+                const double relativeErrorPercent = relativeError * 100.0;
+                values.push_back(relativeErrorPercent);
             }
         }
         return overlay;

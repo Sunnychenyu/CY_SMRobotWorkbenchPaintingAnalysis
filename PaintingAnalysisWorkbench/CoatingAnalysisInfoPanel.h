@@ -30,5 +30,6 @@ namespace robot_qt_viewer
         QLabel* m_historyReadout = nullptr;
         QLabel* m_thicknessReadout = nullptr;
         QLabel* m_computationReadout = nullptr;
+        QLabel* m_validationReadout = nullptr;
     };
 }

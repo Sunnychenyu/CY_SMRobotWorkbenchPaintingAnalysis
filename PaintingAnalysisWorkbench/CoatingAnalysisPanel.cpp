@@ -164,6 +164,10 @@ namespace robot_qt_viewer
             QStringLiteral("Complete model + spatial-filtered spray points"),
             PredictionInputMode::CompleteSpatialFilteredSprayPoints);
         addPredictionMode(
+            QStringLiteral("Complete - candidate vertices"),
+            QStringLiteral("Complete model + spatial-filtered spray points + candidate vertices"),
+            PredictionInputMode::CompleteSpatialFilteredCandidateVertices);
+        addPredictionMode(
             QStringLiteral("Local - spatial filtering"),
             QStringLiteral("Local model + spatial-filtered spray points"),
             PredictionInputMode::LocalSpatialFilteredSprayPoints);
@@ -366,6 +370,36 @@ namespace robot_qt_viewer
         connect(m_cancelButton, &QPushButton::clicked,
             this, &CoatingAnalysisPanel::cancelPredictionRequested);
 
+        m_validationGroup = new QGroupBox(QStringLiteral("Result Validation"), this);
+        auto* validationLayout = new QVBoxLayout(m_validationGroup);
+        validationLayout->setContentsMargins(8, 6, 8, 6);
+        validationLayout->setSpacing(4);
+        auto* referenceButtonsLayout = new QHBoxLayout();
+        referenceButtonsLayout->setContentsMargins(0, 0, 0, 0);
+        referenceButtonsLayout->setSpacing(6);
+        m_setReferenceButton = new QPushButton(
+            QStringLiteral("Set as Reference"), m_validationGroup);
+        m_clearReferenceButton = new QPushButton(
+            QStringLiteral("Clear Reference"), m_validationGroup);
+        m_checkReferenceButton = new QPushButton(
+            QStringLiteral("Check Against Reference"), m_validationGroup);
+        m_referenceStatusLabel = new QLabel(
+            QStringLiteral("Reference: not set"), m_validationGroup);
+        m_referenceStatusLabel->setWordWrap(true);
+        referenceButtonsLayout->addWidget(m_setReferenceButton);
+        referenceButtonsLayout->addWidget(m_clearReferenceButton);
+        validationLayout->addLayout(referenceButtonsLayout);
+        validationLayout->addWidget(m_checkReferenceButton);
+        validationLayout->addWidget(m_referenceStatusLabel);
+        rootLayout->insertWidget(rootLayout->count() - 1, m_validationGroup);
+
+        connect(m_setReferenceButton, &QPushButton::clicked,
+            this, &CoatingAnalysisPanel::setReferenceRequested);
+        connect(m_clearReferenceButton, &QPushButton::clicked,
+            this, &CoatingAnalysisPanel::clearReferenceRequested);
+        connect(m_checkReferenceButton, &QPushButton::clicked,
+            this, &CoatingAnalysisPanel::checkReferenceRequested);
+
         refreshDepositionCurve();
     }
 
@@ -466,6 +500,17 @@ namespace robot_qt_viewer
         m_progressBar->setVisible(viewModel.predictionRunning);
         m_progressBar->setValue(static_cast<int>(viewModel.progress * 1000.0));
         m_statusLabel->setText(viewModel.status);
+        m_validationGroup->setVisible(viewModel.hasModel && viewModel.hasTrajectory);
+        m_setReferenceButton->setVisible(true);
+        m_clearReferenceButton->setVisible(true);
+        m_checkReferenceButton->setVisible(true);
+        m_setReferenceButton->setEnabled(
+            viewModel.canSetReference && !viewModel.predictionRunning);
+        m_clearReferenceButton->setEnabled(
+            viewModel.canClearReference && !viewModel.predictionRunning);
+        m_checkReferenceButton->setEnabled(
+            viewModel.canCheckReference && !viewModel.predictionRunning);
+        m_referenceStatusLabel->setText(viewModel.referenceStatus);
     }
 
     spraythickness::ThicknessModelKind CoatingAnalysisPanel::thicknessModel() const
@@ -523,8 +568,15 @@ namespace robot_qt_viewer
     {
         const PredictionInputMode mode = predictionInputMode();
         return mode == PredictionInputMode::CompleteSpatialFilteredSprayPoints
+            || mode == PredictionInputMode::CompleteSpatialFilteredCandidateVertices
             || mode == PredictionInputMode::LocalSpatialFilteredSprayPoints
             || mode == PredictionInputMode::AxisymmetricProfileSpatialFilteredSprayPoints;
+    }
+
+    bool CoatingAnalysisPanel::spatialCandidateVertexFilteringEnabled() const
+    {
+        return predictionInputMode()
+            == PredictionInputMode::CompleteSpatialFilteredCandidateVertices;
     }
 
     bool CoatingAnalysisPanel::overrideSpatialGridCellSize() const

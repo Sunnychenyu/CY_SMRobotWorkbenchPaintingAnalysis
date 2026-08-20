@@ -53,22 +53,26 @@ namespace robot_qt_viewer
         PaintingAnalysisMeshBinding binding;
         spraythickness::ThicknessPredictionResult prediction;
         smrobot::visualization::SurfaceScalarOverlay overlay;
+        smrobot::visualization::SurfaceScalarOverlay thicknessOverlay;
         double predictionElapsedSeconds = 0.0;
         bool hasResult = false;
         bool showModel = true;
         bool showSprayPoints = true;
         bool showThickness = false;
         bool thicknessPickEnabled = false;
+        bool showRelativeError = false;
 
         void clearResult()
         {
             binding.sampleIndicesBySubMesh.clear();
             prediction = spraythickness::ThicknessPredictionResult();
             overlay = smrobot::visualization::SurfaceScalarOverlay();
+            thicknessOverlay = smrobot::visualization::SurfaceScalarOverlay();
             predictionElapsedSeconds = 0.0;
             hasResult = false;
             showThickness = false;
             thicknessPickEnabled = false;
+            showRelativeError = false;
         }
 
         void clear()

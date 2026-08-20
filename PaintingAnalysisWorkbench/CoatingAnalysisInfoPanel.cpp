@@ -37,6 +37,8 @@ namespace robot_qt_viewer
         m_thicknessReadout = addReadout(layout);
         addSection(layout, QStringLiteral("Computation"));
         m_computationReadout = addReadout(layout);
+        addSection(layout, QStringLiteral("Validation"));
+        m_validationReadout = addReadout(layout);
         layout->addStretch(1);
 
         {
@@ -174,7 +176,25 @@ namespace robot_qt_viewer
                                  .arg(timing.axisymmetricMappingMilliseconds, 0, 'f', 1)
                                  .arg(timing.axisymmetricMappingCacheHit
                                      ? QStringLiteral("cache hit")
-                                     : QStringLiteral("built"));
+                                     : QStringLiteral("built"))
+                         << QStringLiteral("Axis bind : %1 active / %2")
+                                 .arg(static_cast<qulonglong>(
+                                     timing.axisymmetricActiveBindingCount))
+                                 .arg(static_cast<qulonglong>(
+                                     timing.axisymmetricBindingCount))
+                         << QStringLiteral("Axis zero : %1  nonzero: %2")
+                                 .arg(static_cast<qulonglong>(
+                                     timing.axisymmetricMappedZeroCount))
+                                 .arg(static_cast<qulonglong>(
+                                     timing.axisymmetricMappedNonzeroCount))
+                         << QStringLiteral("Axis invalid: %1")
+                                 .arg(static_cast<qulonglong>(
+                                     timing.axisymmetricMappedInvalidCount))
+                         << QStringLiteral("Axis parts: %1 segments / %2 paths")
+                                 .arg(static_cast<qulonglong>(
+                                     timing.axisymmetricActiveSegmentCount))
+                                 .arg(static_cast<qulonglong>(
+                                     timing.axisymmetricActiveProfilePathCount));
                 }
                 if(timing.spatialFiltering) {
                     lines << QStringLiteral("Grid      : %1 ms")
@@ -197,6 +217,14 @@ namespace robot_qt_viewer
                         << QStringLiteral("Vertex refs: %1")
                                  .arg(static_cast<qulonglong>(
                                      timing.spatialGridCandidateVertexPairs))
+                        << QStringLiteral("GPU vertices: %1 / %2")
+                                 .arg(static_cast<qulonglong>(
+                                     timing.predictionVertexCount))
+                                 .arg(static_cast<qulonglong>(
+                                     timing.spatialInputVertexCount))
+                        << QStringLiteral("Skipped zero: %1")
+                                 .arg(static_cast<qulonglong>(
+                                     timing.spatialSkippedVertexCount))
                         << QStringLiteral("Grid cache: %1")
                                  .arg(timing.spatialGridCacheHit
                                      ? QStringLiteral("hit")
@@ -208,5 +236,6 @@ namespace robot_qt_viewer
             m_thicknessReadout->setText(QStringLiteral("No thickness result yet."));
             m_computationReadout->setText(QStringLiteral("No computation data yet."));
         }
+        m_validationReadout->setText(view.validationDetails);
     }
 }

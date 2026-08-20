@@ -24,6 +24,12 @@ namespace robot_qt_viewer
         update();
     }
 
+    void ThicknessLegendWidget::setRelativeErrorMode(bool enabled)
+    {
+        m_relativeErrorMode = enabled;
+        update();
+    }
+
     void ThicknessLegendWidget::paintEvent(QPaintEvent* event)
     {
         QWidget::paintEvent(event);
@@ -40,11 +46,25 @@ namespace robot_qt_viewer
         painter.setPen(palette().color(QPalette::Text));
         painter.drawText(QRect(8, 8, width() - 16, 38),
             Qt::AlignHCenter | Qt::AlignVCenter,
-            QStringLiteral("Thick.\n(um)"));
+            m_relativeErrorMode
+                ? QStringLiteral("Rel. error\n(%)")
+                : QStringLiteral("Thick.\n(um)"));
 
         const QRect barRect(18, 58, 27, qMax(80, height() - 88));
         const smrobot::visualization::ScalarColorMap colorMap =
-            smrobot::visualization::ScalarColorMap::heatMap();
+            m_relativeErrorMode
+                ? smrobot::visualization::ScalarColorMap({
+                    { 0.000, Eigen::Vector3f(0.0f, 0.0f, 0.5f) },
+                    { 0.125, Eigen::Vector3f(0.0f, 0.0f, 1.0f) },
+                    { 0.250, Eigen::Vector3f(0.0f, 0.5f, 1.0f) },
+                    { 0.375, Eigen::Vector3f(0.0f, 1.0f, 1.0f) },
+                    { 0.500, Eigen::Vector3f(0.5f, 1.0f, 0.5f) },
+                    { 0.625, Eigen::Vector3f(1.0f, 1.0f, 0.0f) },
+                    { 0.750, Eigen::Vector3f(1.0f, 0.5f, 0.0f) },
+                    { 0.875, Eigen::Vector3f(1.0f, 0.0f, 0.0f) },
+                    { 1.000, Eigen::Vector3f(0.5f, 0.0f, 0.0f) }
+                })
+                : smrobot::visualization::ScalarColorMap::heatMap();
 
         for(int y = barRect.top(); y <= barRect.bottom(); ++y) {
             const double normalized = barRect.height() > 1

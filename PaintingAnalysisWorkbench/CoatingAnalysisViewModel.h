@@ -57,6 +57,11 @@ namespace robot_qt_viewer
         double averageMicrometers = 0.0;
         bool hasCurrentThickness = false;
         double currentMicrometers = 0.0;
+        bool referenceAvailable = false;
+        bool canSetReference = false;
+        bool canClearReference = false;
+        bool canCheckReference = false;
+        QString referenceStatus = QStringLiteral("Reference: not set");
     };
 
     struct CoatingAnalysisInfoView
@@ -72,6 +77,7 @@ namespace robot_qt_viewer
         double predictionElapsedSeconds = 0.0;
         spraythickness::ThicknessMetrics thicknessMetrics;
         spraythickness::ThicknessPredictionTiming predictionTiming;
+        QString validationDetails = QStringLiteral("No reference result.");
     };
 
     struct CoatingAnalysisVisibilityView

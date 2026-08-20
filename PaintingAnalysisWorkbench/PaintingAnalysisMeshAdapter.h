@@ -38,5 +38,11 @@ namespace robot_qt_viewer
             const std::string& objectId,
             const PaintingAnalysisMeshBinding& binding,
             const spraythickness::ThicknessPredictionResult& prediction);
+
+        static smrobot::visualization::SurfaceScalarOverlay makeRelativeErrorOverlay(
+            const std::string& objectId,
+            const PaintingAnalysisMeshBinding& binding,
+            const spraythickness::ThicknessField& reference,
+            const spraythickness::ThicknessField& candidate);
     };
 }

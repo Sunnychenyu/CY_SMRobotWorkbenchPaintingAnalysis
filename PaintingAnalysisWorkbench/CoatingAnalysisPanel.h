@@ -27,7 +27,8 @@ namespace robot_qt_viewer
         LocalAllSprayPoints = 1,
         CompleteSpatialFilteredSprayPoints = 2,
         LocalSpatialFilteredSprayPoints = 3,
-        AxisymmetricProfileSpatialFilteredSprayPoints = 4
+        AxisymmetricProfileSpatialFilteredSprayPoints = 4,
+        CompleteSpatialFilteredCandidateVertices = 5
     };
 
     // Right-side computation controls of the coating analysis workbench. Pure
@@ -52,6 +53,7 @@ namespace robot_qt_viewer
         bool axisymmetricProfilePredictionEnabled() const;
         bool rotationBasedPredictionEnabled() const;
         bool spatialInfluenceFilteringEnabled() const;
+        bool spatialCandidateVertexFilteringEnabled() const;
         bool overrideSpatialGridCellSize() const;
         double spatialGridCellSizeMillimeters() const;
         void setPeriodicLocalPredictionEnabled(bool enabled);
@@ -65,6 +67,9 @@ namespace robot_qt_viewer
         void openTrajectoryRequested();
         void predictionRequested();
         void cancelPredictionRequested();
+        void setReferenceRequested();
+        void clearReferenceRequested();
+        void checkReferenceRequested();
         void localInputPreviewRequested();
         void localPreviewParametersChanged();
         void axisymmetricProfileSampleCountChanged();
@@ -113,5 +118,10 @@ namespace robot_qt_viewer
         QPushButton* m_cancelButton = nullptr;
         QProgressBar* m_progressBar = nullptr;
         QLabel* m_statusLabel = nullptr;
+        QGroupBox* m_validationGroup = nullptr;
+        QPushButton* m_setReferenceButton = nullptr;
+        QPushButton* m_clearReferenceButton = nullptr;
+        QPushButton* m_checkReferenceButton = nullptr;
+        QLabel* m_referenceStatusLabel = nullptr;
     };
 }
