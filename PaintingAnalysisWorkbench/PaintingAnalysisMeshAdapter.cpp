@@ -226,6 +226,12 @@ namespace robot_qt_viewer
             hashValue(hash, value.y());
         }
 
+        glm::mat4 readModelLocalTransform(const assetcore::ModelDesc& model)
+        {
+            // The packaged SDK exposes only a mutable accessor for this read-only value.
+            return const_cast<assetcore::ModelDesc&>(model).get_local();
+        }
+
         std::uint64_t adaptiveMeshCacheKey(
             const assetcore::ModelDesc& model,
             const std::string& sourcePath,
@@ -251,7 +257,7 @@ namespace robot_qt_viewer
             }
             hashValue(hash, options.selectionPolygon.size());
             hashValue(hash, model.subMeshCount());
-            const glm::mat4 local = model.get_local();
+            const glm::mat4 local = readModelLocalTransform(model);
             for(int column = 0; column < 4; ++column) {
                 for(int row = 0; row < 4; ++row) {
                     hashValue(hash, local[column][row]);
@@ -877,7 +883,7 @@ namespace robot_qt_viewer
             const std::size_t sampleOffset = data.workpiece.samples.size();
             for(std::size_t vertexIndex = 0; vertexIndex < geometry.positions.size(); ++vertexIndex) {
                 sprayworkpiece::SurfaceSample sample;
-                const glm::vec4 localPosition = model.get_local() * glm::vec4(
+                const glm::vec4 localPosition = readModelLocalTransform(model) * glm::vec4(
                     geometry.positions[vertexIndex].x(),
                     geometry.positions[vertexIndex].y(),
                     geometry.positions[vertexIndex].z(),
@@ -890,7 +896,7 @@ namespace robot_qt_viewer
                 if(vertexIndex < geometry.normals.size() &&
                     geometry.normals[vertexIndex].allFinite() &&
                     geometry.normals[vertexIndex].norm() > 1.0e-12f) {
-                    const glm::vec4 localNormal = model.get_local() * glm::vec4(
+                    const glm::vec4 localNormal = readModelLocalTransform(model) * glm::vec4(
                         geometry.normals[vertexIndex].x(),
                         geometry.normals[vertexIndex].y(),
                         geometry.normals[vertexIndex].z(),
@@ -972,7 +978,7 @@ namespace robot_qt_viewer
             std::vector<Eigen::Vector3d> worldPositions(source.positions.size());
             std::vector<SimplifyVertex> vertices(source.positions.size());
             for(std::size_t i = 0; i < source.positions.size(); ++i) {
-                const glm::vec4 local = model.get_local() * glm::vec4(
+                const glm::vec4 local = readModelLocalTransform(model) * glm::vec4(
                     source.positions[i].x(), source.positions[i].y(), source.positions[i].z(), 1.0f);
                 worldPositions[i] = worldFromModel * Eigen::Vector3d(local.x, local.y, local.z);
                 vertices[i].position = source.positions[i].cast<double>();
@@ -1157,7 +1163,7 @@ namespace robot_qt_viewer
             const std::size_t sampleOffset = data.workpiece.samples.size();
             for(std::size_t i = 0; i < target.positions.size(); ++i) {
                 sprayworkpiece::SurfaceSample sample;
-                const glm::vec4 localPosition = model.get_local() * glm::vec4(
+                const glm::vec4 localPosition = readModelLocalTransform(model) * glm::vec4(
                     target.positions[i].x(), target.positions[i].y(), target.positions[i].z(), 1.0f);
                 sample.position = worldFromModel * Eigen::Vector3d(
                     static_cast<double>(localPosition.x), static_cast<double>(localPosition.y), static_cast<double>(localPosition.z));
