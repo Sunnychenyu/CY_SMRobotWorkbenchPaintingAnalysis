@@ -8,6 +8,7 @@
 #include "AxisymmetricProfileSelectionDialog.h"
 #include "PaintingAnalysisMeshAdapter.h"
 #include "ThicknessPredictionJobController.h"
+#include "PaintingAnalysisDialogService.h"
 
 #include "RobotQtViewerDocumentContext.h"
 #include "RobotQtViewerDocumentController.h"
@@ -76,8 +77,30 @@ namespace
             return QStringLiteral("Axisymmetric profile - spatial filtering");
         case PredictionInputMode::CompleteSpatialFilteredCandidateVertices:
             return QStringLiteral("Complete - candidate vertices");
+        case PredictionInputMode::AdaptiveMeshSpatialFilteredCandidateVertices:
+            return QStringLiteral("Adaptive mesh - candidate filtering");
+        case PredictionInputMode::LocalSpatialFilteredCandidateVerticesFullBvh:
+            return QStringLiteral("Local candidates - full BVH");
         }
         return QStringLiteral("Unknown");
+    }
+
+    bool usesNonzeroVertexComparison(robot_qt_viewer::PredictionInputMode mode)
+    {
+        using robot_qt_viewer::PredictionInputMode;
+        switch(mode) {
+        case PredictionInputMode::LocalAllSprayPoints:
+        case PredictionInputMode::LocalSpatialFilteredSprayPoints:
+        case PredictionInputMode::AxisymmetricProfileSpatialFilteredSprayPoints:
+        case PredictionInputMode::AdaptiveMeshSpatialFilteredCandidateVertices:
+        case PredictionInputMode::LocalSpatialFilteredCandidateVerticesFullBvh:
+            return true;
+        case PredictionInputMode::CompleteAllSprayPoints:
+        case PredictionInputMode::CompleteSpatialFilteredSprayPoints:
+        case PredictionInputMode::CompleteSpatialFilteredCandidateVertices:
+            return false;
+        }
+        return false;
     }
 
     const simulation_project::SceneObjectDesc* findObject(
@@ -334,6 +357,10 @@ namespace robot_qt_viewer
             this, &CoatingAnalysisModuleController::openModelFromDialog);
         connect(&m_panel, &CoatingAnalysisPanel::openTrajectoryRequested,
             this, &CoatingAnalysisModuleController::openTrajectoryFromDialog);
+        connect(&m_panel, &CoatingAnalysisPanel::selectModelFileRequested,
+            this, &CoatingAnalysisModuleController::selectModelFileFromDialog);
+        connect(&m_panel, &CoatingAnalysisPanel::selectTrajectoryFileRequested,
+            this, &CoatingAnalysisModuleController::selectTrajectoryFileFromDialog);
         connect(&m_panel, &CoatingAnalysisPanel::predictionRequested,
             this, &CoatingAnalysisModuleController::predictThickness);
         connect(&m_panel, &CoatingAnalysisPanel::cancelPredictionRequested,
@@ -347,6 +374,8 @@ namespace robot_qt_viewer
         connect(&m_panel, &CoatingAnalysisPanel::localInputPreviewRequested,
             this, &CoatingAnalysisModuleController::previewLocalInputs);
         connect(&m_panel, &CoatingAnalysisPanel::profileRegionSelectionRequested,
+            this, &CoatingAnalysisModuleController::selectAxisymmetricProfileRegion);
+        connect(&m_panel, &CoatingAnalysisPanel::adaptiveRegionSelectionRequested,
             this, &CoatingAnalysisModuleController::selectAxisymmetricProfileRegion);
         connect(&m_panel, &CoatingAnalysisPanel::axisymmetricProfileSampleCountChanged,
             this, [this]() {
@@ -368,11 +397,13 @@ namespace robot_qt_viewer
                     if(RobotQtViewerViewportServices* services = m_context.viewportServices()) {
                         services->setSurfaceScalarProbeEnabled(false, QString());
                         services->clearSurfaceScalarOverlay(m_session.objectId);
+                        services->clearCoatingPredictionModel(m_session.objectId);
                     }
                     m_session.clearResult();
                     publishStateChanged();
                 }
-                if(!m_panel.rotationBasedPredictionEnabled()) {
+                if(!m_panel.rotationBasedPredictionEnabled()
+                    && !m_panel.adaptiveMeshPredictionEnabled()) {
                     m_hasLocalPreview = false;
                     m_localPreviewDetails.clear();
                     clearAxisymmetricProfileSelection();
@@ -383,14 +414,31 @@ namespace robot_qt_viewer
                     refreshViewModel();
                     return;
                 }
-                if(m_panel.axisymmetricProfilePredictionEnabled()) {
+                if(m_panel.axisymmetricProfilePredictionEnabled()
+                    || m_panel.localCandidateVertexPredictionEnabled()) {
                     clearAxisymmetricProfileSelection();
                     applyModelVisibilityOverrides();
                     if(ensurePreviewWorkpieceLoaded() && hasEffectiveRotationAxis()) {
                         if(ensureAxisymmetricProfileSlice()) {
                             updateAxisymmetricProfileDebugState();
+                            m_status = m_panel.localCandidateVertexPredictionEnabled()
+                                ? QStringLiteral(
+                                    "Select the local prediction region; complete-model BVH will be used for occlusion.")
+                                : QStringLiteral(
+                                    "Select a profile prediction region to prepare axisymmetric prediction.");
+                        }
+                    }
+                    refreshViewModel();
+                    return;
+                }
+                if(m_panel.adaptiveMeshPredictionEnabled()) {
+                    m_hasLocalPreview = false;
+                    m_localPreviewDetails.clear();
+                    if(ensurePreviewWorkpieceLoaded() && hasEffectiveRotationAxis()) {
+                        if(ensureAxisymmetricProfileSlice()) {
+                            updateAxisymmetricProfileDebugState();
                             m_status = QStringLiteral(
-                                "Select a profile prediction region to prepare axisymmetric prediction.");
+                                "Select the dense prediction region to prepare adaptive mesh prediction.");
                         }
                     }
                     refreshViewModel();
@@ -403,6 +451,28 @@ namespace robot_qt_viewer
                 } else {
                     refreshViewModel();
                 }
+            });
+        connect(&m_panel, &CoatingAnalysisPanel::rotationAxisChanged,
+            this, [this]() {
+                if(m_predictionJob->isRunning()) {
+                    return;
+                }
+                if(!m_panel.rotationBasedPredictionEnabled()
+                    && !m_panel.adaptiveMeshPredictionEnabled()) {
+                    return;
+                }
+                clearAxisymmetricProfileSelection();
+                m_hasLocalPreview = false;
+                m_localPreviewDetails.clear();
+                if(ensurePreviewWorkpieceLoaded() && hasEffectiveRotationAxis()
+                    && ensureAxisymmetricProfileSlice()) {
+                    updateAxisymmetricProfileDebugState();
+                    m_status = m_panel.adaptiveMeshPredictionEnabled()
+                        ? QStringLiteral("Rotation axis changed. Select the dense prediction region again.")
+                        : QStringLiteral("Rotation axis changed. Select the profile prediction region again.");
+                }
+                refreshViewModel();
+                publishStateChanged();
             });
         connect(&m_panel, &CoatingAnalysisPanel::spatialGridParametersChanged,
             this, [this]() {
@@ -509,7 +579,12 @@ namespace robot_qt_viewer
             m_session.showRelativeError = false;
             if(RobotQtViewerViewportServices* services = m_context.viewportServices()) {
                 QString error;
-                services->applySurfaceScalarOverlay(m_session.overlay, &error);
+                if(m_session.predictionDisplayModel) {
+                    services->applySurfaceScalarOverlayModel(
+                        m_session.overlay, *m_session.predictionDisplayModel, &error);
+                } else {
+                    services->applySurfaceScalarOverlay(m_session.overlay, &error);
+                }
             }
         }
         m_status = QStringLiteral("Reference result cleared.");
@@ -550,6 +625,15 @@ namespace robot_qt_viewer
 
         std::vector<double> absoluteErrors;
         absoluteErrors.reserve(current.results.size());
+        const PredictionInputMode comparisonMode = m_panel.predictionInputMode();
+        const bool nonzeroOnly = usesNonzeroVertexComparison(comparisonMode);
+        std::vector<std::uint8_t> comparisonMask(current.results.size(), 1U);
+        if(nonzeroOnly) {
+            for(std::size_t index = 0; index < current.results.size(); ++index) {
+                comparisonMask[index] = std::abs(current.results[index].thickness)
+                    > kValidationActiveThicknessMeters ? 1U : 0U;
+            }
+        }
         std::size_t referenceActive = 0;
         std::size_t currentActive = 0;
         std::size_t commonActive = 0;
@@ -561,6 +645,9 @@ namespace robot_qt_viewer
         double maximumRelativeError = 0.0;
 
         for(std::size_t index = 0; index < current.results.size(); ++index) {
+            if(comparisonMask[index] == 0U) {
+                continue;
+            }
             const spraythickness::ThicknessSampleResult& reference =
                 m_referenceThickness.results[index];
             const spraythickness::ThicknessSampleResult& candidate = current.results[index];
@@ -590,9 +677,6 @@ namespace robot_qt_viewer
                 ++commonActive;
             }
 
-            // Compare every complete-model vertex, including vertices whose
-            // reference or candidate thickness is zero. Active counts above
-            // remain coverage diagnostics only.
             const double absoluteError = std::abs(candidate.thickness - reference.thickness);
             absoluteErrors.push_back(absoluteError);
             absoluteErrorSum += absoluteError;
@@ -605,29 +689,44 @@ namespace robot_qt_viewer
                     kValidationActiveThicknessMeters));
         }
 
+        if(absoluteErrors.empty()) {
+            m_validationDetails = QStringLiteral(
+                "Validation unavailable\n"
+                "The current mode produced no nonzero thickness vertices to compare.");
+            m_status = QStringLiteral("Validation stopped: no active current vertices.");
+            refreshViewModel();
+            emit statusMessageRequested(m_status, 5000);
+            return;
+        }
+
         std::sort(absoluteErrors.begin(), absoluteErrors.end());
         const std::size_t p95Index = static_cast<std::size_t>(std::ceil(
             static_cast<double>(absoluteErrors.size()) * 0.95)) - 1;
         const double p95AbsoluteError = absoluteErrors[p95Index];
-        const std::size_t comparisonCount = current.results.size();
+        const std::size_t comparisonCount = absoluteErrors.size();
         const double meanAbsoluteError = absoluteErrorSum
             / static_cast<double>(comparisonCount);
         const double rootMeanSquareError = std::sqrt(
             squaredErrorSum / static_cast<double>(comparisonCount));
         m_validationDetails = QStringLiteral(
             "Validation complete\n"
-            "Compared vertices : %1 (all)\n"
-            "Reference active : %2\n"
-            "Current active   : %3\n"
-            "Common active   : %4\n"
-            "Missing reference: %5\n"
-            "Current-only    : %6\n"
-            "MAE (all)       : %7 um\n"
-            "RMSE (all)      : %8 um\n"
-            "P95 abs error   : %9 um\n"
-            "Max abs error   : %10 um\n"
-            "Max relative err: %11%")
+            "Mode             : %1\n"
+            "Compared vertices : %2 (%3)\n"
+            "Excluded vertices: %4\n"
+            "Reference active : %5\n"
+            "Current active   : %6\n"
+            "Common active    : %7\n"
+            "Missing reference: %8\n"
+            "Current-only     : %9\n"
+            "MAE              : %10 um\n"
+            "RMSE             : %11 um\n"
+            "P95 abs error    : %12 um\n"
+            "Max abs error    : %13 um\n"
+            "Max relative err : %14%")
+            .arg(predictionModeName(comparisonMode))
             .arg(static_cast<qulonglong>(comparisonCount))
+            .arg(nonzeroOnly ? QStringLiteral("current nonzero") : QStringLiteral("all vertices"))
+            .arg(static_cast<qulonglong>(current.results.size() - comparisonCount))
             .arg(static_cast<qulonglong>(referenceActive))
             .arg(static_cast<qulonglong>(currentActive))
             .arg(static_cast<qulonglong>(commonActive))
@@ -646,10 +745,15 @@ namespace robot_qt_viewer
                     m_session.objectId.toStdString(),
                     m_session.binding,
                     m_referenceThickness,
-                    current);
+                    current,
+                    &comparisonMask);
             if(RobotQtViewerViewportServices* services = m_context.viewportServices()) {
                 QString applyError;
-                if(!services->applySurfaceScalarOverlay(errorOverlay, &applyError)) {
+                const bool errorOverlayApplied = m_session.predictionDisplayModel
+                    ? services->applySurfaceScalarOverlayModel(
+                        errorOverlay, *m_session.predictionDisplayModel, &applyError)
+                    : services->applySurfaceScalarOverlay(errorOverlay, &applyError);
+                if(!errorOverlayApplied) {
                     m_status = applyError.isEmpty()
                         ? QStringLiteral("Validation completed, but the error cloud could not be displayed.")
                         : applyError;
@@ -798,7 +902,11 @@ namespace robot_qt_viewer
             if(RobotQtViewerViewportServices* services = m_context.viewportServices()) {
                 if(!services->setSurfaceScalarOverlayVisible(m_session.objectId, true)) {
                     QString error;
-                    if(!services->applySurfaceScalarOverlay(m_session.overlay, &error)) {
+                    const bool applied = m_session.predictionDisplayModel
+                        ? services->applySurfaceScalarOverlayModel(
+                            m_session.overlay, *m_session.predictionDisplayModel, &error)
+                        : services->applySurfaceScalarOverlay(m_session.overlay, &error);
+                    if(!applied) {
                         m_status = error;
                         m_session.clearResult();
                         refreshViewModel();
@@ -1095,6 +1203,32 @@ namespace robot_qt_viewer
         loadTrajectory(kFixedTrajectoryPath);
     }
 
+    void CoatingAnalysisModuleController::selectModelFileFromDialog()
+    {
+        const QString path = PaintingAnalysisDialogService::selectModelFile(&m_panel);
+        if(path.isEmpty()) {
+            return;
+        }
+
+        double scaleToMeters = 0.001;
+        if(!PaintingAnalysisDialogService::selectModelUnitScale(
+               &m_panel,
+               path,
+               scaleToMeters)) {
+            return;
+        }
+        loadModel(path, scaleToMeters);
+    }
+
+    void CoatingAnalysisModuleController::selectTrajectoryFileFromDialog()
+    {
+        const QString path = PaintingAnalysisDialogService::selectTrajectoryFile(&m_panel);
+        if(path.isEmpty()) {
+            return;
+        }
+        loadTrajectory(path);
+    }
+
     void CoatingAnalysisModuleController::predictThickness()
     {
         if(m_predictionJob->isRunning()) {
@@ -1121,6 +1255,20 @@ namespace robot_qt_viewer
             refreshViewModel();
             return;
         }
+        if(m_panel.adaptiveMeshPredictionEnabled()
+            && (!m_axisymmetricProfile->selection.enabled || !hasEffectiveRotationAxis())) {
+            m_status = QStringLiteral(
+                "Adaptive mesh prediction requires a fitted axis and a selected dense region.");
+            refreshViewModel();
+            return;
+        }
+        if(m_panel.localCandidateVertexPredictionEnabled()
+            && (!m_axisymmetricProfile->selection.enabled || !hasEffectiveRotationAxis())) {
+            m_status = QStringLiteral(
+                "Local candidate prediction requires a fitted axis and a selected prediction region.");
+            refreshViewModel();
+            return;
+        }
 
         const std::filesystem::path sourcePath = simulation_project::AssetResolver::resolveProjectPath(
             makeResolveContext(m_context.projectSession()),
@@ -1140,11 +1288,68 @@ namespace robot_qt_viewer
         }
 
         try {
-            PaintingAnalysisMeshData mesh = PaintingAnalysisMeshAdapter::build(
-                *model,
-                object->name,
-                sourcePath.generic_u8string(),
-                makeTransform(object->transform));
+            const Eigen::Isometry3d worldFromModel = makeTransform(object->transform);
+            PaintingAnalysisMeshData mesh;
+            const bool localCandidateMode =
+                m_panel.localCandidateVertexPredictionEnabled();
+            std::vector<std::uint32_t> restrictedPredictionVertices;
+            if(m_panel.adaptiveMeshPredictionEnabled()) {
+                AdaptiveMeshOptions adaptiveOptions;
+                adaptiveOptions.axisOrigin = effectiveRotationAxisOrigin();
+                adaptiveOptions.axisDirection = effectiveRotationAxisDirection();
+                adaptiveOptions.selectionMinimum = m_axisymmetricProfile->selection.minimum;
+                adaptiveOptions.selectionMaximum = m_axisymmetricProfile->selection.maximum;
+                adaptiveOptions.selectionPolygon = m_axisymmetricProfile->selection.polygon;
+                adaptiveOptions.simplificationPercent = m_panel.adaptiveMeshSimplificationPercent();
+                mesh = PaintingAnalysisMeshAdapter::buildAdaptive(
+                    *model, object->name, sourcePath.generic_u8string(), worldFromModel, adaptiveOptions);
+            } else {
+                mesh = PaintingAnalysisMeshAdapter::build(
+                    *model, object->name, sourcePath.generic_u8string(), worldFromModel);
+            }
+            if(localCandidateMode) {
+                AdaptiveMeshOptions regionOptions;
+                regionOptions.axisOrigin = effectiveRotationAxisOrigin();
+                regionOptions.axisDirection = effectiveRotationAxisDirection();
+                regionOptions.selectionMinimum = m_axisymmetricProfile->selection.minimum;
+                regionOptions.selectionMaximum = m_axisymmetricProfile->selection.maximum;
+                regionOptions.selectionPolygon = m_axisymmetricProfile->selection.polygon;
+                restrictedPredictionVertices =
+                    PaintingAnalysisMeshAdapter::selectVerticesInRegion(
+                        mesh.workpiece, regionOptions);
+                if(restrictedPredictionVertices.empty()) {
+                    throw std::runtime_error(
+                        "The selected prediction region contains no model vertices.");
+                }
+                mesh.warnings.push_back(
+                    "Local candidate prediction vertices: "
+                    + std::to_string(restrictedPredictionVertices.size()) + "/"
+                    + std::to_string(mesh.workpiece.samples.size()));
+            }
+            QString adaptiveMeshTiming;
+            QString adaptiveMeshSummary;
+            QString adaptiveMeshTopologyWarning;
+            bool adaptiveMeshCacheHit = false;
+            for(const std::string& warning : mesh.warnings) {
+                LOG_DEBUG("rs2026") << "Painting analysis mesh: " << warning;
+                if(m_panel.adaptiveMeshPredictionEnabled()
+                    && (warning == "Adaptive mesh cache hit; simplification was skipped."
+                        || warning == "Adaptive mesh disk cache hit; simplification was skipped.")) {
+                    adaptiveMeshCacheHit = true;
+                }
+                if(m_panel.adaptiveMeshPredictionEnabled()
+                    && warning.rfind("Adaptive mesh total:", 0) == 0) {
+                    adaptiveMeshTiming = QString::fromStdString(warning);
+                }
+                if(m_panel.adaptiveMeshPredictionEnabled()
+                    && warning.rfind("Adaptive mesh QEM:", 0) == 0) {
+                    adaptiveMeshSummary = QString::fromStdString(warning);
+                }
+                if(m_panel.adaptiveMeshPredictionEnabled()
+                    && warning.rfind("Adaptive mesh QEM output failed topology validation", 0) == 0) {
+                    adaptiveMeshTopologyWarning = QString::fromStdString(warning);
+                }
+            }
             if(mesh.workpiece.empty()) {
                 m_status = QStringLiteral("The model has no mesh vertices.");
                 refreshViewModel();
@@ -1157,6 +1362,51 @@ namespace robot_qt_viewer
             }
             m_session.clearResult();
             m_session.binding = std::move(mesh.binding);
+            m_session.predictionDisplayModel = std::move(mesh.displayModel);
+            if(m_panel.adaptiveMeshPredictionEnabled()) {
+                QString displayError;
+                if(!m_session.predictionDisplayModel
+                    || !services->setCoatingPredictionModel(
+                        QString::fromStdString(object->id),
+                        *m_session.predictionDisplayModel,
+                        &displayError)) {
+                    throw std::runtime_error(
+                        displayError.isEmpty()
+                        ? "Failed to display the adaptive prediction mesh."
+                        : displayError.toStdString());
+                }
+                std::size_t sourceVertexCount = 0;
+                std::size_t displayVertexCount = 0;
+                std::size_t displayTriangleCount = mesh.workpiece.triangleIndices.size() / 3;
+                for(const auto& subMesh : model->subMeshes()) {
+                    sourceVertexCount += subMesh.geometry.positions.size();
+                }
+                for(const auto& subMesh : m_session.predictionDisplayModel->subMeshes()) {
+                    displayVertexCount += subMesh.geometry.positions.size();
+                }
+                m_status = QStringLiteral(
+                    "Adaptive mesh ready: vertices %1 -> %2, triangles %3, dense region retained.")
+                    .arg(static_cast<qulonglong>(sourceVertexCount))
+                    .arg(static_cast<qulonglong>(displayVertexCount))
+                    .arg(static_cast<qulonglong>(displayTriangleCount));
+                if(!adaptiveMeshTiming.isEmpty()) {
+                    m_status += QStringLiteral("\n") + adaptiveMeshTiming;
+                }
+                if(!adaptiveMeshSummary.isEmpty()) {
+                    m_status += QStringLiteral("\n") + adaptiveMeshSummary;
+                }
+                if(!adaptiveMeshTopologyWarning.isEmpty()) {
+                    m_status += QStringLiteral("\n") + adaptiveMeshTopologyWarning;
+                }
+                if(adaptiveMeshCacheHit) {
+                    m_status += QStringLiteral("\nAdaptive mesh cache hit; simplification skipped.");
+                }
+            } else if(localCandidateMode) {
+                m_status = QStringLiteral(
+                    "Local candidate mode ready: %1/%2 vertices selected; complete-model BVH enabled.")
+                    .arg(static_cast<qulonglong>(restrictedPredictionVertices.size()))
+                    .arg(static_cast<qulonglong>(mesh.workpiece.samples.size()));
+            }
             m_hasCurrentThickness = false;
 
             spraythickness::ThicknessPredictionTask task;
@@ -1184,6 +1434,16 @@ namespace robot_qt_viewer
                 task.options.spatialFiltering.overrideGridCellSize
                 ? m_panel.spatialGridCellSizeMillimeters() * 1.0e-3
                 : 0.0;
+            if(localCandidateMode) {
+                task.options.spatialFiltering.predictionVertexIndices =
+                    std::move(restrictedPredictionVertices);
+                task.options.enableBvhOcclusion = true;
+                task.options.spatialFiltering.fallbackToFullPrediction = false;
+            }
+            if(m_panel.adaptiveMeshPredictionEnabled()) {
+                task.options.spatialFiltering.enabled = true;
+                task.options.spatialFiltering.filterCandidateVertices = true;
+            }
             if(task.options.periodicLocal.enabled) {
                 Eigen::Vector3d boundsMinimum = Eigen::Vector3d::Constant(
                     std::numeric_limits<double>::max());
@@ -1221,11 +1481,16 @@ namespace robot_qt_viewer
                     m_axisymmetricProfile->selection.minimum;
                 task.options.axisymmetricProfile.selectionMaximum =
                     m_axisymmetricProfile->selection.maximum;
+                task.options.axisymmetricProfile.selectionPolygon =
+                    m_axisymmetricProfile->selection.polygon;
             }
 
             m_predictionObjectId = QString::fromStdString(object->id);
             m_predictionProgress = 0.0;
             m_status = QStringLiteral("Preparing GPU thickness prediction...");
+            if(!adaptiveMeshTiming.isEmpty()) {
+                m_status += QStringLiteral("\n") + adaptiveMeshTiming;
+            }
             m_session.predictionElapsedSeconds = 0.0;
             refreshViewModel();
             publishStateChanged();
@@ -1517,11 +1782,30 @@ namespace robot_qt_viewer
         }
         const auto selection = dialog.selection();
         if(!selection.enabled) {
-            m_status = QStringLiteral("Draw a rectangular profile region before accepting.");
+            m_status = QStringLiteral("Draw a closed freeform profile region before accepting.");
             refreshViewModel();
             return;
         }
         m_axisymmetricProfile->selection = selection;
+        if(m_panel.adaptiveMeshPredictionEnabled()
+            || m_panel.localCandidateVertexPredictionEnabled()) {
+            // Build the profile reduction for visualization only. These two
+            // modes still predict from their own full-model vertex selection;
+            // the reduction supplies the green selected contour line and must
+            // not replace the prediction vertex list.
+            if(!rebuildAxisymmetricProfileReduction()) {
+                return;
+            }
+            m_status = m_panel.localCandidateVertexPredictionEnabled()
+                ? QStringLiteral(
+                    "Local prediction region selected. Outside vertices will remain zero; complete-model BVH will be used.")
+                : QStringLiteral(
+                    "Adaptive dense region selected. Outside target vertex ratio: %1%%.")
+                    .arg(m_panel.adaptiveMeshSimplificationPercent(), 0, 'f', 1);
+            refreshViewModel();
+            publishStateChanged();
+            return;
+        }
         rebuildAxisymmetricProfileReduction();
     }
 
@@ -1598,7 +1882,13 @@ namespace robot_qt_viewer
             // freshly uploaded thickness overlay on the next viewport frame.
             services->clearCoatingPredictionDebugState();
             QString applyError;
-            if(!services->applySurfaceScalarOverlay(overlay, &applyError)) {
+            const bool adaptiveDisplay = m_panel.adaptiveMeshPredictionEnabled()
+                && m_session.predictionDisplayModel != nullptr;
+            const bool overlayApplied = adaptiveDisplay
+                ? services->applySurfaceScalarOverlayModel(
+                    overlay, *m_session.predictionDisplayModel, &applyError)
+                : services->applySurfaceScalarOverlay(overlay, &applyError);
+            if(!overlayApplied) {
                 m_session.clearResult();
                 m_status = applyError.isEmpty()
                     ? QStringLiteral("Failed to display the thickness result.")
@@ -1627,6 +1917,7 @@ namespace robot_qt_viewer
             emit statusMessageRequested(m_status, 3000);
         } catch(const std::exception& exception) {
             services->clearSurfaceScalarOverlay(objectId);
+            services->clearCoatingPredictionModel(objectId);
             m_session.clearResult();
             m_status = QString::fromLocal8Bit(exception.what());
             refreshViewModel();
@@ -1642,6 +1933,10 @@ namespace robot_qt_viewer
         m_predictionObjectId.clear();
         m_predictionProgress = 0.0;
         m_predictionTimerActive = false;
+        if(RobotQtViewerViewportServices* services = m_context.viewportServices()) {
+            services->clearSurfaceScalarOverlay(m_session.objectId);
+            services->clearCoatingPredictionModel(m_session.objectId);
+        }
         m_session.clearResult();
         m_status = message.isEmpty()
             ? QStringLiteral("GPU thickness prediction failed.")
@@ -1697,7 +1992,11 @@ namespace robot_qt_viewer
                         m_session.showThickness)
                     && m_session.showThickness) {
                     QString error;
-                    if(!services->applySurfaceScalarOverlay(m_session.overlay, &error)) {
+                    const bool applied = m_session.predictionDisplayModel
+                        ? services->applySurfaceScalarOverlayModel(
+                            m_session.overlay, *m_session.predictionDisplayModel, &error)
+                        : services->applySurfaceScalarOverlay(m_session.overlay, &error);
+                    if(!applied) {
                         m_session.clearResult();
                         m_status = error.isEmpty()
                             ? QStringLiteral("Failed to re-apply the thickness overlay.")
@@ -1741,6 +2040,9 @@ namespace robot_qt_viewer
             services->clearCoatingPredictionDebugState();
             if(!m_session.objectId.isEmpty() && m_session.hasResult) {
                 services->clearSurfaceScalarOverlay(m_session.objectId);
+            }
+            if(!m_session.objectId.isEmpty()) {
+                services->clearCoatingPredictionModel(m_session.objectId);
             }
         }
         m_session.clearResult();
@@ -1984,7 +2286,11 @@ namespace robot_qt_viewer
         }
         if(RobotQtViewerViewportServices* services = m_context.viewportServices()) {
             QString error;
-            if(services->applySurfaceScalarOverlay(m_session.overlay, &error)) {
+            const bool applied = m_session.predictionDisplayModel
+                ? services->applySurfaceScalarOverlayModel(
+                    m_session.overlay, *m_session.predictionDisplayModel, &error)
+                : services->applySurfaceScalarOverlay(m_session.overlay, &error);
+            if(applied) {
                 services->setSurfaceScalarProbeEnabled(
                     m_session.showThickness && m_session.thicknessPickEnabled,
                     m_session.objectId);
@@ -2027,12 +2333,21 @@ namespace robot_qt_viewer
         viewModel.localMode = m_panel.periodicLocalPredictionEnabled();
         viewModel.axisymmetricProfileMode =
             m_panel.axisymmetricProfilePredictionEnabled();
+        viewModel.adaptiveMeshMode = m_panel.adaptiveMeshPredictionEnabled();
+        viewModel.localCandidateVertexMode =
+            m_panel.localCandidateVertexPredictionEnabled();
         viewModel.hasEffectiveRotationAxis = hasEffectiveRotationAxis();
         viewModel.hasAxisymmetricProfileSelection =
             m_axisymmetricProfile->reduction.valid();
         viewModel.rotationAxisSource = rotationAxisSource();
         viewModel.canStartPrediction = viewModel.hasModel && viewModel.hasTrajectory
             && (!viewModel.localMode || viewModel.hasEffectiveRotationAxis)
+            && (!viewModel.adaptiveMeshMode
+                || (viewModel.hasEffectiveRotationAxis
+                    && m_axisymmetricProfile->selection.enabled))
+            && (!viewModel.localCandidateVertexMode
+                || (viewModel.hasEffectiveRotationAxis
+                    && m_axisymmetricProfile->selection.enabled))
             && (!viewModel.axisymmetricProfileMode
                 || (viewModel.hasEffectiveRotationAxis
                     && viewModel.hasAxisymmetricProfileSelection));
@@ -2314,14 +2629,20 @@ namespace robot_qt_viewer
             const bool modeWasAlreadyLocal = m_panel.periodicLocalPredictionEnabled();
             const bool modeWasAlreadyProfile =
                 m_panel.axisymmetricProfilePredictionEnabled();
+            const bool modeWasAlreadyAdaptive =
+                m_panel.adaptiveMeshPredictionEnabled();
+            const bool modeWasAlreadyLocalCandidate =
+                m_panel.localCandidateVertexPredictionEnabled();
             if(RobotQtViewerViewportServices* services = m_context.viewportServices()) {
                 services->setCoatingPredictionDebugState(
                     makeRotationFitDebugState(mesh, fit));
             }
-            if(!modeWasAlreadyLocal && !modeWasAlreadyProfile) {
+            if(!modeWasAlreadyLocal && !modeWasAlreadyProfile && !modeWasAlreadyAdaptive
+                && !modeWasAlreadyLocalCandidate) {
                 m_panel.setPeriodicLocalPredictionEnabled(true);
             }
-            if(modeWasAlreadyLocal || modeWasAlreadyProfile) {
+            if(modeWasAlreadyLocal || modeWasAlreadyProfile || modeWasAlreadyAdaptive
+                || modeWasAlreadyLocalCandidate) {
                 applyModelVisibilityOverrides();
             }
             if(modeWasAlreadyLocal && !m_session.trajectory.empty()) {
@@ -2331,6 +2652,20 @@ namespace robot_qt_viewer
                     updateAxisymmetricProfileDebugState();
                     m_status = QStringLiteral(
                         "Rotation axis updated. Select the profile prediction region again.");
+                }
+                refreshViewModel();
+            } else if(modeWasAlreadyAdaptive) {
+                if(ensureAxisymmetricProfileSlice()) {
+                    updateAxisymmetricProfileDebugState();
+                    m_status = QStringLiteral(
+                        "Rotation axis updated. Select the dense prediction region again.");
+                }
+                refreshViewModel();
+            } else if(modeWasAlreadyLocalCandidate) {
+                if(ensureAxisymmetricProfileSlice()) {
+                    updateAxisymmetricProfileDebugState();
+                    m_status = QStringLiteral(
+                        "Rotation axis updated. Select the local prediction region again.");
                 }
                 refreshViewModel();
             } else if(m_session.trajectory.empty()) {

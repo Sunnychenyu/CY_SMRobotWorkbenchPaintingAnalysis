@@ -33,6 +33,8 @@ namespace robot_qt_viewer
         bool predictionRunning = false;
         bool localMode = false;
         bool axisymmetricProfileMode = false;
+        bool adaptiveMeshMode = false;
+        bool localCandidateVertexMode = false;
         bool hasEffectiveRotationAxis = false;
         bool hasAxisymmetricProfileSelection = false;
         bool canStartPrediction = false;

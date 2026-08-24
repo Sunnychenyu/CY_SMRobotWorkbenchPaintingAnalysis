@@ -88,6 +88,8 @@ namespace robot_qt_viewer
         void openModelFromDialog();
         bool loadTrajectory(const QString& path);
         void openTrajectoryFromDialog();
+        void selectModelFileFromDialog();
+        void selectTrajectoryFileFromDialog();
         void predictThickness();
         void setCurrentResultAsReference();
         void clearReferenceResult();

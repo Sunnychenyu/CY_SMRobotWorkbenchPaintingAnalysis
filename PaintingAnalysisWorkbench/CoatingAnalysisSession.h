@@ -9,6 +9,7 @@
 #include <QString>
 
 #include <cstddef>
+#include <memory>
 #include <vector>
 
 namespace robot_qt_viewer
@@ -51,6 +52,7 @@ namespace robot_qt_viewer
         spraytrajectory::SprayTrajectory trajectory;
         std::vector<spraytrajectory::SprayPathPoint> waypoints;
         PaintingAnalysisMeshBinding binding;
+        std::shared_ptr<assetcore::ModelDesc> predictionDisplayModel;
         spraythickness::ThicknessPredictionResult prediction;
         smrobot::visualization::SurfaceScalarOverlay overlay;
         smrobot::visualization::SurfaceScalarOverlay thicknessOverlay;
@@ -65,6 +67,7 @@ namespace robot_qt_viewer
         void clearResult()
         {
             binding.sampleIndicesBySubMesh.clear();
+            predictionDisplayModel.reset();
             prediction = spraythickness::ThicknessPredictionResult();
             overlay = smrobot::visualization::SurfaceScalarOverlay();
             thicknessOverlay = smrobot::visualization::SurfaceScalarOverlay();

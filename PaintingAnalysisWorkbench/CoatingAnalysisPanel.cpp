@@ -7,6 +7,7 @@
 #include <QDoubleSpinBox>
 #include <QFormLayout>
 #include <QGroupBox>
+#include <QGridLayout>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QProgressBar>
@@ -51,22 +52,36 @@ namespace robot_qt_viewer
 
         // Model and trajectory loading.
         auto* dataGroup = new QGroupBox(QStringLiteral("Data"), this);
-        auto* dataLayout = new QHBoxLayout(dataGroup);
+        auto* dataLayout = new QGridLayout(dataGroup);
         dataLayout->setContentsMargins(8, 6, 8, 6);
         dataLayout->setSpacing(6);
-        m_openModelButton = new QPushButton(QStringLiteral("Load Model"), dataGroup);
-        m_openTrajectoryButton = new QPushButton(QStringLiteral("Load Trajectory"), dataGroup);
-        m_openModelButton->setToolTip(QStringLiteral("Load the workpiece model."));
-        m_openTrajectoryButton->setToolTip(QStringLiteral("Load the spray trajectory."));
+        m_openModelButton = new QPushButton(QStringLiteral("Debug Model"), dataGroup);
+        m_openTrajectoryButton = new QPushButton(QStringLiteral("Debug Trajectory"), dataGroup);
+        m_selectModelButton = new QPushButton(QStringLiteral("Select Model File"), dataGroup);
+        m_selectTrajectoryButton = new QPushButton(QStringLiteral("Select Trajectory File"), dataGroup);
+        m_openModelButton->setToolTip(
+            QStringLiteral("Load the configured debug workpiece model."));
+        m_openTrajectoryButton->setToolTip(
+            QStringLiteral("Load the configured debug spray trajectory."));
+        m_selectModelButton->setToolTip(QStringLiteral("Choose a workpiece model file."));
+        m_selectTrajectoryButton->setToolTip(QStringLiteral("Choose a spray trajectory file."));
         m_openModelButton->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
         m_openTrajectoryButton->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-        dataLayout->addWidget(m_openModelButton);
-        dataLayout->addWidget(m_openTrajectoryButton);
+        m_selectModelButton->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        m_selectTrajectoryButton->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        dataLayout->addWidget(m_openModelButton, 0, 0);
+        dataLayout->addWidget(m_openTrajectoryButton, 0, 1);
+        dataLayout->addWidget(m_selectModelButton, 1, 0);
+        dataLayout->addWidget(m_selectTrajectoryButton, 1, 1);
         rootLayout->addWidget(dataGroup);
         connect(m_openModelButton, &QPushButton::clicked,
             this, &CoatingAnalysisPanel::openModelRequested);
         connect(m_openTrajectoryButton, &QPushButton::clicked,
             this, &CoatingAnalysisPanel::openTrajectoryRequested);
+        connect(m_selectModelButton, &QPushButton::clicked,
+            this, &CoatingAnalysisPanel::selectModelFileRequested);
+        connect(m_selectTrajectoryButton, &QPushButton::clicked,
+            this, &CoatingAnalysisPanel::selectTrajectoryFileRequested);
 
         // Deposition algorithm + curve preview.
         auto* algorithmGroup = new QGroupBox(QStringLiteral("Deposition Model"), this);
@@ -175,6 +190,14 @@ namespace robot_qt_viewer
             QStringLiteral("Axisymmetric profile - spatial filtering"),
             QStringLiteral("Axisymmetric profile samples + spatial-filtered spray points"),
             PredictionInputMode::AxisymmetricProfileSpatialFilteredSprayPoints);
+        addPredictionMode(
+            QStringLiteral("Adaptive mesh - candidate filtering"),
+            QStringLiteral("Dense selected region + sparse outside mesh + candidate spray points/vertices"),
+            PredictionInputMode::AdaptiveMeshSpatialFilteredCandidateVertices);
+        addPredictionMode(
+            QStringLiteral("Local candidates - full BVH"),
+            QStringLiteral("Selected local vertices + candidate spray points/vertices + complete-model occlusion BVH"),
+            PredictionInputMode::LocalSpatialFilteredCandidateVerticesFullBvh);
         m_predictionModeCombo->setToolTip(
             m_predictionModeCombo->itemData(0, Qt::ToolTipRole).toString());
         modeLayout->addWidget(m_predictionModeCombo);
@@ -195,6 +218,20 @@ namespace robot_qt_viewer
             QStringLiteral("Grid cell (mm)"),
             m_spatialGridCellSizeSpinBox);
         modeLayout->addWidget(m_spatialGridOptionsWidget);
+        m_adaptiveMeshOptionsWidget = new QWidget(modeGroup);
+        auto* adaptiveForm = new QFormLayout(m_adaptiveMeshOptionsWidget);
+        adaptiveForm->setContentsMargins(0, 0, 0, 0);
+        m_selectAdaptiveRegionButton = new QPushButton(
+            QStringLiteral("Select prediction region"), m_adaptiveMeshOptionsWidget);
+        m_adaptiveMeshSimplificationSpinBox = new QDoubleSpinBox(m_adaptiveMeshOptionsWidget);
+        m_adaptiveMeshSimplificationSpinBox->setRange(1.0, 100.0);
+        m_adaptiveMeshSimplificationSpinBox->setDecimals(1);
+        m_adaptiveMeshSimplificationSpinBox->setSingleStep(1.0);
+        m_adaptiveMeshSimplificationSpinBox->setValue(30.0);
+        m_adaptiveMeshSimplificationSpinBox->setSuffix(QStringLiteral(" %"));
+        adaptiveForm->addRow(m_selectAdaptiveRegionButton);
+        adaptiveForm->addRow(QStringLiteral("Outside target vertex ratio"), m_adaptiveMeshSimplificationSpinBox);
+        modeLayout->addWidget(m_adaptiveMeshOptionsWidget);
         rootLayout->addWidget(modeGroup);
 
         m_localConfigGroup = new QGroupBox(QStringLiteral("Local Setup"), this);
@@ -274,6 +311,8 @@ namespace robot_qt_viewer
             const bool profileMode = axisymmetricProfilePredictionEnabled();
             const bool rotationBasedMode = rotationBasedPredictionEnabled();
             const bool spatialMode = spatialInfluenceFilteringEnabled();
+            const bool adaptiveMode = adaptiveMeshPredictionEnabled();
+            const bool localCandidateMode = localCandidateVertexPredictionEnabled();
             m_localConfigGroup->setVisible(rotationBasedMode);
             m_periodicAxisCombo->setEnabled(rotationBasedMode);
             m_periodicSectorCountSpinBox->setEnabled(localMode);
@@ -294,6 +333,10 @@ namespace robot_qt_viewer
             m_showLocalSectorCheckBox->setText(profileMode
                 ? QStringLiteral("Profile line") : QStringLiteral("Local sector"));
             m_spatialGridOptionsWidget->setVisible(spatialMode);
+            m_adaptiveMeshOptionsWidget->setVisible(adaptiveMode || localCandidateMode);
+            m_selectAdaptiveRegionButton->setEnabled(adaptiveMode || localCandidateMode);
+            m_adaptiveMeshSimplificationSpinBox->setVisible(adaptiveMode);
+            m_adaptiveMeshSimplificationSpinBox->setEnabled(adaptiveMode);
             m_overrideSpatialGridCellSizeCheckBox->setEnabled(spatialMode);
             m_spatialGridCellSizeSpinBox->setEnabled(
                 spatialMode && m_overrideSpatialGridCellSizeCheckBox->isChecked());
@@ -328,11 +371,20 @@ namespace robot_qt_viewer
         connect(m_periodicAxisCombo,
             QOverload<int>::of(&QComboBox::currentIndexChanged),
             this,
-            [this](int) { emit localPreviewParametersChanged(); });
+            [this](int) {
+                emit rotationAxisChanged();
+                emit localPreviewParametersChanged();
+            });
         connect(m_pickRotationSurfaceButton, &QPushButton::clicked,
             this, &CoatingAnalysisPanel::rotationSurfacePickRequested);
         connect(m_selectProfileRegionButton, &QPushButton::clicked,
             this, &CoatingAnalysisPanel::profileRegionSelectionRequested);
+        connect(m_selectAdaptiveRegionButton, &QPushButton::clicked,
+            this, &CoatingAnalysisPanel::adaptiveRegionSelectionRequested);
+        connect(m_adaptiveMeshSimplificationSpinBox,
+            QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+            this,
+            [this](double) { emit localPreviewParametersChanged(); });
         connect(m_previewLocalInputsButton, &QPushButton::clicked,
             this, &CoatingAnalysisPanel::localInputPreviewRequested);
         connect(m_showCylindricalSurfaceCheckBox, &QCheckBox::toggled,
@@ -430,6 +482,8 @@ namespace robot_qt_viewer
             !viewModel.workpieces.isEmpty() && !viewModel.predictionRunning);
         m_openModelButton->setEnabled(!viewModel.predictionRunning);
         m_openTrajectoryButton->setEnabled(!viewModel.predictionRunning);
+        m_selectModelButton->setEnabled(!viewModel.predictionRunning);
+        m_selectTrajectoryButton->setEnabled(!viewModel.predictionRunning);
         m_trajectorySamplingCombo->setEnabled(!viewModel.predictionRunning);
         m_timeStepSpinBox->setEnabled(
             !viewModel.predictionRunning
@@ -442,18 +496,29 @@ namespace robot_qt_viewer
             viewModel.hasModel && viewModel.hasTrajectory
             && !viewModel.predictionRunning);
         const bool spatialMode = spatialInfluenceFilteringEnabled();
+        const bool adaptiveMode = adaptiveMeshPredictionEnabled();
+        const bool localCandidateMode = localCandidateVertexPredictionEnabled();
         m_spatialGridOptionsWidget->setVisible(spatialMode);
+        m_adaptiveMeshOptionsWidget->setVisible(adaptiveMode || localCandidateMode);
+        m_selectAdaptiveRegionButton->setEnabled(
+            (adaptiveMode || localCandidateMode) && !viewModel.predictionRunning);
+        m_adaptiveMeshSimplificationSpinBox->setVisible(adaptiveMode);
+        m_adaptiveMeshSimplificationSpinBox->setEnabled(
+            adaptiveMode && !viewModel.predictionRunning);
         m_overrideSpatialGridCellSizeCheckBox->setEnabled(
             spatialMode && !viewModel.predictionRunning);
         m_spatialGridCellSizeSpinBox->setEnabled(
             spatialMode && !viewModel.predictionRunning
             && m_overrideSpatialGridCellSizeCheckBox->isChecked());
         m_localConfigGroup->setVisible(
-            viewModel.localMode || viewModel.axisymmetricProfileMode);
+            viewModel.localMode || viewModel.axisymmetricProfileMode
+            || viewModel.adaptiveMeshMode || viewModel.localCandidateVertexMode);
         m_rotationAxisStatusLabel->setText(
             QStringLiteral("Rotation axis: %1").arg(viewModel.rotationAxisSource));
         m_pickRotationSurfaceButton->setEnabled(
-            viewModel.hasModel && (viewModel.localMode || viewModel.axisymmetricProfileMode)
+            viewModel.hasModel && (viewModel.localMode
+                || viewModel.axisymmetricProfileMode
+                || viewModel.adaptiveMeshMode || viewModel.localCandidateVertexMode)
             && !viewModel.predictionRunning);
         m_selectProfileRegionButton->setVisible(viewModel.axisymmetricProfileMode);
         m_selectProfileRegionButton->setEnabled(
@@ -461,12 +526,19 @@ namespace robot_qt_viewer
         m_previewLocalInputsButton->setEnabled(
             viewModel.canPreviewLocalInputs && viewModel.localMode
             && !viewModel.predictionRunning);
+        m_selectAdaptiveRegionButton->setVisible(
+            viewModel.adaptiveMeshMode || viewModel.localCandidateVertexMode);
+        m_selectAdaptiveRegionButton->setEnabled(
+            (viewModel.adaptiveMeshMode || viewModel.localCandidateVertexMode)
+            && viewModel.hasEffectiveRotationAxis
+            && !viewModel.predictionRunning);
         m_previewLocalInputsButton->setText(
             viewModel.hasLocalPreview
                 ? QStringLiteral("Refresh local input preview")
                 : QStringLiteral("Preview local prediction inputs"));
         const bool periodicControlsEnabled = !viewModel.predictionRunning
-            && (viewModel.localMode || viewModel.axisymmetricProfileMode);
+            && (viewModel.localMode || viewModel.axisymmetricProfileMode
+                || viewModel.adaptiveMeshMode || viewModel.localCandidateVertexMode);
         m_periodicAxisCombo->setEnabled(periodicControlsEnabled);
         m_periodicSectorCountSpinBox->setVisible(viewModel.localMode);
         m_periodicSectorLabel->setVisible(viewModel.localMode);
@@ -479,7 +551,9 @@ namespace robot_qt_viewer
             !viewModel.predictionRunning && viewModel.axisymmetricProfileMode);
         m_previewLocalInputsButton->setVisible(viewModel.localMode);
         const bool debugControlsEnabled = periodicControlsEnabled
-            && (viewModel.hasLocalPreview || viewModel.hasAxisymmetricProfileSelection);
+            && (viewModel.hasLocalPreview || viewModel.hasAxisymmetricProfileSelection
+                || ((viewModel.adaptiveMeshMode || viewModel.localCandidateVertexMode)
+                    && viewModel.hasEffectiveRotationAxis));
         m_showCylindricalSurfaceCheckBox->setEnabled(debugControlsEnabled);
         m_showRotationAxisCheckBox->setEnabled(debugControlsEnabled);
         m_showLocalSectorCheckBox->setEnabled(debugControlsEnabled);
@@ -555,7 +629,8 @@ namespace robot_qt_viewer
 
     bool CoatingAnalysisPanel::rotationBasedPredictionEnabled() const
     {
-        return periodicLocalPredictionEnabled() || axisymmetricProfilePredictionEnabled();
+        return periodicLocalPredictionEnabled() || axisymmetricProfilePredictionEnabled()
+            || adaptiveMeshPredictionEnabled() || localCandidateVertexPredictionEnabled();
     }
 
     PredictionInputMode CoatingAnalysisPanel::predictionInputMode() const
@@ -570,13 +645,36 @@ namespace robot_qt_viewer
         return mode == PredictionInputMode::CompleteSpatialFilteredSprayPoints
             || mode == PredictionInputMode::CompleteSpatialFilteredCandidateVertices
             || mode == PredictionInputMode::LocalSpatialFilteredSprayPoints
-            || mode == PredictionInputMode::AxisymmetricProfileSpatialFilteredSprayPoints;
+            || mode == PredictionInputMode::AxisymmetricProfileSpatialFilteredSprayPoints
+            || mode == PredictionInputMode::AdaptiveMeshSpatialFilteredCandidateVertices
+            || mode == PredictionInputMode::LocalSpatialFilteredCandidateVerticesFullBvh;
     }
 
     bool CoatingAnalysisPanel::spatialCandidateVertexFilteringEnabled() const
     {
         return predictionInputMode()
-            == PredictionInputMode::CompleteSpatialFilteredCandidateVertices;
+            == PredictionInputMode::CompleteSpatialFilteredCandidateVertices
+            || predictionInputMode()
+                == PredictionInputMode::AdaptiveMeshSpatialFilteredCandidateVertices
+            || predictionInputMode()
+                == PredictionInputMode::LocalSpatialFilteredCandidateVerticesFullBvh;
+    }
+
+    bool CoatingAnalysisPanel::adaptiveMeshPredictionEnabled() const
+    {
+        return predictionInputMode()
+            == PredictionInputMode::AdaptiveMeshSpatialFilteredCandidateVertices;
+    }
+
+    bool CoatingAnalysisPanel::localCandidateVertexPredictionEnabled() const
+    {
+        return predictionInputMode()
+            == PredictionInputMode::LocalSpatialFilteredCandidateVerticesFullBvh;
+    }
+
+    double CoatingAnalysisPanel::adaptiveMeshSimplificationPercent() const
+    {
+        return m_adaptiveMeshSimplificationSpinBox->value();
     }
 
     bool CoatingAnalysisPanel::overrideSpatialGridCellSize() const

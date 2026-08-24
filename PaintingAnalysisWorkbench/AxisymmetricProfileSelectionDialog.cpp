@@ -10,6 +10,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
+#include <utility>
+#include <vector>
 
 namespace robot_qt_viewer
 {
@@ -29,26 +32,45 @@ namespace robot_qt_viewer
         spraythickness::opengl::AxisymmetricProfileSelection selection() const
         {
             spraythickness::opengl::AxisymmetricProfileSelection result;
-            if(m_selectionRectangle.isNull() || m_selectionRectangle.width() < 2
-                || m_selectionRectangle.height() < 2) {
+            std::vector<Eigen::Vector2d> polygon;
+            polygon.reserve(m_selectionPath.size());
+            for(const QPointF& screenPoint : m_selectionPath) {
+                const Eigen::Vector2d sectionPoint = screenToSection(screenPoint);
+                if(polygon.empty() || (sectionPoint - polygon.back()).norm() > 1.0e-9) {
+                    polygon.push_back(sectionPoint);
+                }
+            }
+            if(polygon.size() > 1 && (polygon.front() - polygon.back()).norm() <= 1.0e-9) {
+                polygon.pop_back();
+            }
+            if(polygon.size() < 3) {
                 return result;
             }
+
             result.enabled = true;
-            const QRectF rectangle = m_selectionRectangle.normalized();
-            result.minimum = screenToSection(rectangle.bottomLeft());
-            result.maximum = screenToSection(rectangle.topRight());
+            result.polygon = std::move(polygon);
+            result.minimum = Eigen::Vector2d::Constant(
+                std::numeric_limits<double>::max());
+            result.maximum = Eigen::Vector2d::Constant(
+                std::numeric_limits<double>::lowest());
+            for(const Eigen::Vector2d& point : result.polygon) {
+                result.minimum = result.minimum.cwiseMin(point);
+                result.maximum = result.maximum.cwiseMax(point);
+            }
             return result;
         }
 
         void clearSelection()
         {
-            m_selectionRectangle = QRectF();
+            m_selectionPath.clear();
             update();
         }
 
         void selectEntireProfile()
         {
-            m_selectionRectangle = plotRectangle();
+            const QRectF plot = plotRectangle();
+            m_selectionPath = {
+                plot.topLeft(), plot.topRight(), plot.bottomRight(), plot.bottomLeft() };
             update();
         }
 
@@ -83,6 +105,7 @@ namespace robot_qt_viewer
                 }
                 painter.drawPath(path);
             }
+
             const auto activeSelection = selection();
             if(activeSelection.enabled) {
                 painter.setPen(QPen(QColor(75, 235, 115), 2.4));
@@ -94,30 +117,34 @@ namespace robot_qt_viewer
                         ? contour.points.size() : contour.points.size() - 1;
                     for(std::size_t index = 0; index < segmentCount; ++index) {
                         const auto& first = contour.points[index];
-                    const auto& second = contour.points[
-                        (index + 1) % contour.points.size()];
-                        double minimumT = 0.0;
-                        double maximumT = 1.0;
-                        if(!clipSegmentToSelection(
-                            activeSelection,
-                            first.sectionPosition,
-                            second.sectionPosition,
-                            minimumT,
-                            maximumT)) {
-                            continue;
+                        const auto& second = contour.points[
+                            (index + 1) % contour.points.size()];
+                        for(const auto& interval : clipSegmentToSelection(
+                            activeSelection, first.sectionPosition, second.sectionPosition)) {
+                            painter.drawLine(
+                                sectionToScreen(first.sectionPosition
+                                    + interval.first * (second.sectionPosition - first.sectionPosition)),
+                                sectionToScreen(first.sectionPosition
+                                    + interval.second * (second.sectionPosition - first.sectionPosition)));
                         }
-                        painter.drawLine(
-                            sectionToScreen(first.sectionPosition
-                                + minimumT * (second.sectionPosition - first.sectionPosition)),
-                            sectionToScreen(first.sectionPosition
-                                + maximumT * (second.sectionPosition - first.sectionPosition)));
                     }
                 }
             }
-            if(!m_selectionRectangle.isNull()) {
-                painter.fillRect(m_selectionRectangle.normalized(), QColor(55, 190, 90, 48));
-                painter.setPen(QPen(QColor(75, 235, 115), 1.5));
-                painter.drawRect(m_selectionRectangle.normalized());
+
+            if(m_selectionPath.size() >= 2) {
+                QPolygonF polygon;
+                for(const QPointF& point : m_selectionPath) {
+                    polygon << point;
+                }
+                if(m_selectionPath.size() >= 3) {
+                    painter.setBrush(QColor(55, 190, 90, 48));
+                    painter.setPen(QPen(QColor(75, 235, 115), 1.5));
+                    painter.drawPolygon(polygon);
+                } else {
+                    painter.setBrush(Qt::NoBrush);
+                    painter.setPen(QPen(QColor(75, 235, 115), 1.5));
+                    painter.drawPolyline(polygon);
+                }
             }
             painter.setPen(QColor(185, 190, 198));
             painter.drawText(12, height() - 10,
@@ -129,8 +156,8 @@ namespace robot_qt_viewer
             if(event->button() != Qt::LeftButton) {
                 return;
             }
-            m_dragStart = clampToPlot(event->pos());
-            m_selectionRectangle = QRectF(m_dragStart, m_dragStart);
+            m_selectionPath.clear();
+            m_selectionPath.push_back(clampToPlot(event->pos()));
             m_dragging = true;
             update();
         }
@@ -140,59 +167,95 @@ namespace robot_qt_viewer
             if(!m_dragging) {
                 return;
             }
-            m_selectionRectangle = QRectF(m_dragStart, clampToPlot(event->pos()))
-                .normalized();
-            update();
+            const QPointF point = clampToPlot(event->pos());
+            if(m_selectionPath.empty() || screenDistance(m_selectionPath.back(), point) >= 2.0) {
+                m_selectionPath.push_back(point);
+                update();
+            }
         }
 
         void mouseReleaseEvent(QMouseEvent* event) override
         {
             if(event->button() == Qt::LeftButton && m_dragging) {
                 m_dragging = false;
-                m_selectionRectangle = QRectF(m_dragStart, clampToPlot(event->pos()))
-                    .normalized();
+                const QPointF point = clampToPlot(event->pos());
+                if(m_selectionPath.empty()
+                    || screenDistance(m_selectionPath.back(), point) >= 1.0) {
+                    m_selectionPath.push_back(point);
+                }
                 update();
             }
         }
 
     private:
-        static bool clipSegmentToSelection(
+        static double screenDistance(const QPointF& first, const QPointF& second)
+        {
+            return std::hypot(first.x() - second.x(), first.y() - second.y());
+        }
+
+        static double cross2d(const Eigen::Vector2d& first, const Eigen::Vector2d& second)
+        {
+            return first.x() * second.y() - first.y() * second.x();
+        }
+
+        static std::vector<std::pair<double, double>> clipSegmentToSelection(
             const spraythickness::opengl::AxisymmetricProfileSelection& selection,
             const Eigen::Vector2d& first,
-            const Eigen::Vector2d& second,
-            double& minimumT,
-            double& maximumT)
+            const Eigen::Vector2d& second)
         {
-            minimumT = 0.0;
-            maximumT = 1.0;
+            std::vector<std::pair<double, double>> intervals;
             if(!selection.enabled) {
-                return true;
+                intervals.emplace_back(0.0, 1.0);
+                return intervals;
             }
-            const Eigen::Vector2d minimum = selection.minimum.cwiseMin(selection.maximum);
-            const Eigen::Vector2d maximum = selection.minimum.cwiseMax(selection.maximum);
+            if(selection.polygon.size() < 3) {
+                if(selection.contains((first + second) * 0.5)) {
+                    intervals.emplace_back(0.0, 1.0);
+                }
+                return intervals;
+            }
+            std::vector<double> parameters{ 0.0, 1.0 };
             const Eigen::Vector2d delta = second - first;
-            for(int dimension = 0; dimension < 2; ++dimension) {
-                if(std::abs(delta[dimension]) <= 1.0e-15) {
-                    if(first[dimension] < minimum[dimension]
-                        || first[dimension] > maximum[dimension]) {
-                        return false;
+            for(std::size_t index = 0; index < selection.polygon.size(); ++index) {
+                const Eigen::Vector2d edgeStart = selection.polygon[index];
+                const Eigen::Vector2d edge = selection.polygon[
+                    (index + 1) % selection.polygon.size()] - edgeStart;
+                const double denominator = cross2d(delta, edge);
+                if(std::abs(denominator) <= 1.0e-15) {
+                    if(delta.squaredNorm() > 1.0e-24
+                        && std::abs(cross2d(edgeStart - first, delta)) <= 1.0e-10) {
+                        parameters.push_back(std::clamp(
+                            (edgeStart - first).dot(delta) / delta.squaredNorm(), 0.0, 1.0));
+                        parameters.push_back(std::clamp(
+                            (edgeStart + edge - first).dot(delta) / delta.squaredNorm(),
+                            0.0, 1.0));
                     }
                     continue;
                 }
-                double entry = (minimum[dimension] - first[dimension]) / delta[dimension];
-                double exit = (maximum[dimension] - first[dimension]) / delta[dimension];
-                if(entry > exit) {
-                    std::swap(entry, exit);
-                }
-                minimumT = std::max(minimumT, entry);
-                maximumT = std::min(maximumT, exit);
-                if(minimumT > maximumT) {
-                    return false;
+                const Eigen::Vector2d offset = edgeStart - first;
+                const double segmentT = cross2d(offset, edge) / denominator;
+                const double edgeT = cross2d(offset, delta) / denominator;
+                if(segmentT >= -1.0e-12 && segmentT <= 1.0 + 1.0e-12
+                    && edgeT >= -1.0e-12 && edgeT <= 1.0 + 1.0e-12) {
+                    parameters.push_back(std::clamp(segmentT, 0.0, 1.0));
                 }
             }
-            minimumT = std::clamp(minimumT, 0.0, 1.0);
-            maximumT = std::clamp(maximumT, 0.0, 1.0);
-            return minimumT <= maximumT;
+            std::sort(parameters.begin(), parameters.end());
+            parameters.erase(std::unique(parameters.begin(), parameters.end(),
+                [](double firstParameter, double secondParameter) {
+                    return std::abs(firstParameter - secondParameter) <= 1.0e-10;
+                }), parameters.end());
+            for(std::size_t index = 1; index < parameters.size(); ++index) {
+                const double minimumT = parameters[index - 1];
+                const double maximumT = parameters[index];
+                if(maximumT - minimumT <= 1.0e-12) {
+                    continue;
+                }
+                if(selection.contains(first + 0.5 * (minimumT + maximumT) * delta)) {
+                    intervals.emplace_back(minimumT, maximumT);
+                }
+            }
+            return intervals;
         }
 
         QRectF plotRectangle() const
@@ -252,8 +315,7 @@ namespace robot_qt_viewer
         }
 
         const spraythickness::opengl::AxisymmetricProfileSlice& m_slice;
-        QPointF m_dragStart;
-        QRectF m_selectionRectangle;
+        std::vector<QPointF> m_selectionPath;
         bool m_dragging{ false };
     };
 
@@ -266,8 +328,8 @@ namespace robot_qt_viewer
         resize(720, 560);
         auto* layout = new QVBoxLayout(this);
         auto* description = new QLabel(
-            QStringLiteral("Drag one rectangle over the profile region to predict. "
-                "Outside the rectangle, final thickness is set to 0."), this);
+            QStringLiteral("Draw a closed freeform boundary over the profile region. "
+                "The selected boundary is predicted; outside it, final thickness is set to 0."), this);
         description->setWordWrap(true);
         layout->addWidget(description);
         m_canvas = new ProfileCanvas(slice, this);

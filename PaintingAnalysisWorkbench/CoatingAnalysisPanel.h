@@ -28,7 +28,9 @@ namespace robot_qt_viewer
         CompleteSpatialFilteredSprayPoints = 2,
         LocalSpatialFilteredSprayPoints = 3,
         AxisymmetricProfileSpatialFilteredSprayPoints = 4,
-        CompleteSpatialFilteredCandidateVertices = 5
+        CompleteSpatialFilteredCandidateVertices = 5,
+        AdaptiveMeshSpatialFilteredCandidateVertices = 6,
+        LocalSpatialFilteredCandidateVerticesFullBvh = 7
     };
 
     // Right-side computation controls of the coating analysis workbench. Pure
@@ -54,6 +56,9 @@ namespace robot_qt_viewer
         bool rotationBasedPredictionEnabled() const;
         bool spatialInfluenceFilteringEnabled() const;
         bool spatialCandidateVertexFilteringEnabled() const;
+        bool adaptiveMeshPredictionEnabled() const;
+        bool localCandidateVertexPredictionEnabled() const;
+        double adaptiveMeshSimplificationPercent() const;
         bool overrideSpatialGridCellSize() const;
         double spatialGridCellSizeMillimeters() const;
         void setPeriodicLocalPredictionEnabled(bool enabled);
@@ -65,6 +70,8 @@ namespace robot_qt_viewer
     signals:
         void openModelRequested();
         void openTrajectoryRequested();
+        void selectModelFileRequested();
+        void selectTrajectoryFileRequested();
         void predictionRequested();
         void cancelPredictionRequested();
         void setReferenceRequested();
@@ -72,9 +79,11 @@ namespace robot_qt_viewer
         void checkReferenceRequested();
         void localInputPreviewRequested();
         void localPreviewParametersChanged();
+        void rotationAxisChanged();
         void axisymmetricProfileSampleCountChanged();
         void spatialGridParametersChanged();
         void profileRegionSelectionRequested();
+        void adaptiveRegionSelectionRequested();
         void localDebugVisibilityChanged(
             bool cylindricalSurface,
             bool rotationAxis,
@@ -92,6 +101,8 @@ namespace robot_qt_viewer
         DepositionCurveWidget* m_curveWidget = nullptr;
         QPushButton* m_openModelButton = nullptr;
         QPushButton* m_openTrajectoryButton = nullptr;
+        QPushButton* m_selectModelButton = nullptr;
+        QPushButton* m_selectTrajectoryButton = nullptr;
         QComboBox* m_trajectorySamplingCombo = nullptr;
         QDoubleSpinBox* m_timeStepSpinBox = nullptr;
         QCheckBox* m_bvhCheckBox = nullptr;
@@ -100,6 +111,9 @@ namespace robot_qt_viewer
         QWidget* m_spatialGridOptionsWidget = nullptr;
         QCheckBox* m_overrideSpatialGridCellSizeCheckBox = nullptr;
         QDoubleSpinBox* m_spatialGridCellSizeSpinBox = nullptr;
+        QWidget* m_adaptiveMeshOptionsWidget = nullptr;
+        QPushButton* m_selectAdaptiveRegionButton = nullptr;
+        QDoubleSpinBox* m_adaptiveMeshSimplificationSpinBox = nullptr;
         QGroupBox* m_localConfigGroup = nullptr;
         QLabel* m_rotationAxisStatusLabel = nullptr;
         QLabel* m_periodicSectorLabel = nullptr;
