@@ -1059,13 +1059,6 @@ namespace robot_qt_viewer
 
     void CoatingAnalysisModuleController::handleEvent(const RobotQtViewerEvent& event)
     {
-        if(event.kind == RobotQtViewerEventKind::UiLanguageChanged) {
-            setLanguageCode(event.languageCode);
-            refreshViewModel();
-            emit statusMessageRequested(
-                coatingAnalysisTranslate(m_languageCode, m_status), 3000);
-            return;
-        }
         if(event.kind == RobotQtViewerEventKind::ProjectOpened) {
             clearSession();
             ensureWorkpieceSelection();
