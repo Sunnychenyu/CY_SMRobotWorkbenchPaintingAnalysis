@@ -1,4 +1,5 @@
 #include "AxisymmetricProfileSelectionDialog.h"
+#include "CoatingAnalysisLanguage.h"
 
 #include <QDialogButtonBox>
 #include <QLabel>
@@ -7,6 +8,7 @@
 #include <QPainterPath>
 #include <QPushButton>
 #include <QVBoxLayout>
+#include <QAbstractButton>
 
 #include <algorithm>
 #include <cmath>
@@ -63,6 +65,13 @@ namespace robot_qt_viewer
         void clearSelection()
         {
             m_selectionPath.clear();
+            update();
+        }
+
+        void setLanguageCode(const QString& languageCode)
+        {
+            m_languageCode = languageCode.toLower().startsWith(QStringLiteral("zh"))
+                ? QStringLiteral("zh-CN") : QStringLiteral("en");
             update();
         }
 
@@ -148,7 +157,8 @@ namespace robot_qt_viewer
             }
             painter.setPen(QColor(185, 190, 198));
             painter.drawText(12, height() - 10,
-                QStringLiteral("Horizontal: radius (mm)   Vertical: axis coordinate (mm)"));
+                coatingAnalysisTranslate(m_languageCode,
+                    QStringLiteral("Horizontal: radius (mm)   Vertical: axis coordinate (mm)")));
         }
 
         void mousePressEvent(QMouseEvent* event) override
@@ -317,6 +327,7 @@ namespace robot_qt_viewer
         const spraythickness::opengl::AxisymmetricProfileSlice& m_slice;
         std::vector<QPointF> m_selectionPath;
         bool m_dragging{ false };
+        QString m_languageCode{ QStringLiteral("en") };
     };
 
     AxisymmetricProfileSelectionDialog::AxisymmetricProfileSelectionDialog(
@@ -346,6 +357,23 @@ namespace robot_qt_viewer
         connect(buttons, &QDialogButtonBox::accepted, this, &QDialog::accept);
         connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
         layout->addWidget(buttons);
+        setLanguageCode(QStringLiteral("en"));
+    }
+
+    void AxisymmetricProfileSelectionDialog::setLanguageCode(const QString& languageCode)
+    {
+        const QString normalized = languageCode.toLower().startsWith(QStringLiteral("zh"))
+            ? QStringLiteral("zh-CN") : QStringLiteral("en");
+        for(QWidget* widget : findChildren<QWidget*>()) {
+            if(auto* button = qobject_cast<QAbstractButton*>(widget)) {
+                button->setText(coatingAnalysisTranslate(normalized, button->text()));
+            } else if(auto* label = qobject_cast<QLabel*>(widget)) {
+                label->setText(coatingAnalysisTranslate(normalized, label->text()));
+            }
+        }
+        if(m_canvas != nullptr) {
+            m_canvas->setLanguageCode(normalized);
+        }
     }
 
     spraythickness::opengl::AxisymmetricProfileSelection

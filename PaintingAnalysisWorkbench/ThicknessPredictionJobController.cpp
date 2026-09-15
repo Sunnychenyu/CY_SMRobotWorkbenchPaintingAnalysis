@@ -9,6 +9,7 @@
 #include <QOpenGLContext>
 #include <QSurfaceFormat>
 #include <QThread>
+#include <QString>
 
 #include <condition_variable>
 #include <exception>
@@ -55,21 +56,36 @@ namespace robot_qt_viewer
         delete m_surface;
     }
 
-    bool ThicknessPredictionJobController::start(spraythickness::ThicknessPredictionTask task)
+    bool ThicknessPredictionJobController::start(
+        spraythickness::ThicknessPredictionTask task,
+        QString* errorMessage)
     {
-        if(isRunning() || m_surface == nullptr || !m_surface->isValid()
-            || m_thread == nullptr || !m_thread->isRunning()) {
+        const auto fail = [errorMessage](const QString& message) {
+            if(errorMessage != nullptr) {
+                *errorMessage = message;
+            }
             return false;
+        };
+        if(isRunning()) {
+            return fail(QStringLiteral("A thickness prediction task is already running."));
         }
-
+        if(m_surface == nullptr || !m_surface->isValid()) {
+            return fail(QStringLiteral("The offscreen OpenGL surface is not valid."));
+        }
+        if(m_thread == nullptr || !m_thread->isRunning()) {
+            return fail(QStringLiteral("The GPU prediction worker thread is not running."));
+        }
         m_cancelRequested.store(false);
         {
             std::lock_guard<std::mutex> lock(m_taskMutex);
             if(m_pendingTask.has_value()) {
-                return false;
+                return fail(QStringLiteral("A GPU prediction task is already queued."));
             }
             m_pendingTask = std::move(task);
             m_running.store(true);
+        }
+        if(errorMessage != nullptr) {
+            errorMessage->clear();
         }
         m_taskCondition.notify_one();
         emit runningChanged(true);

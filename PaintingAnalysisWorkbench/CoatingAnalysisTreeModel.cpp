@@ -1,4 +1,5 @@
 #include "CoatingAnalysisTreeModel.h"
+#include "CoatingAnalysisLanguage.h"
 
 #include <QColor>
 #include <QFont>
@@ -19,6 +20,14 @@ namespace robot_qt_viewer
     CoatingAnalysisTreeModel::CoatingAnalysisTreeModel(QObject* parent)
         : QAbstractItemModel(parent)
     {
+    }
+
+    void CoatingAnalysisTreeModel::setLanguageCode(const QString& languageCode)
+    {
+        m_languageCode = languageCode.toLower().startsWith(QStringLiteral("zh"))
+            ? QStringLiteral("zh-CN") : QStringLiteral("en");
+        beginResetModel();
+        endResetModel();
     }
 
     void CoatingAnalysisTreeModel::setTrajectory(
@@ -240,36 +249,43 @@ namespace robot_qt_viewer
         const int row = static_cast<int>(id % kIdBase);
 
         if(role == Qt::DisplayRole) {
+            QString displayText;
             switch(kind) {
             case CoatingAnalysisNodeKind::Trajectory:
-                return hasTrajectory()
-                    ? QVariant(QStringLiteral("Trajectory  |  %1").arg(m_trajectoryName))
-                    : QVariant(QStringLiteral("Trajectory"));
+                displayText = hasTrajectory()
+                    ? QStringLiteral("Trajectory  |  %1").arg(m_trajectoryName)
+                    : QStringLiteral("Trajectory");
+                break;
             case CoatingAnalysisNodeKind::Waypoints:
-                return hasWaypoints()
-                    ? QVariant(QStringLiteral("Waypoints  |  %1").arg(m_waypoints->size()))
-                    : QVariant(QStringLiteral("Waypoints"));
+                displayText = hasWaypoints()
+                    ? QStringLiteral("Waypoints  |  %1").arg(m_waypoints->size())
+                    : QStringLiteral("Waypoints");
+                break;
             case CoatingAnalysisNodeKind::Models:
-                return QVariant(QStringLiteral("Models  |  %1").arg(m_workpieces.size()));
+                displayText = QStringLiteral("Models  |  %1").arg(m_workpieces.size());
+                break;
             case CoatingAnalysisNodeKind::Thickness:
-                return m_hasThickness
-                    ? QVariant(QStringLiteral("Thickness"))
-                    : QVariant(QStringLiteral("Thickness"));
+                displayText = QStringLiteral("Thickness");
+                break;
             case CoatingAnalysisNodeKind::TrajectoryInfo:
-                return QVariant(trajectoryInfoText(row));
+                displayText = trajectoryInfoText(row);
+                break;
             case CoatingAnalysisNodeKind::Waypoint:
-                return QVariant(waypointText(row));
+                displayText = waypointText(row);
+                break;
             case CoatingAnalysisNodeKind::Model:
-                return row >= 0 && row < m_workpieces.size()
-                    ? QVariant(m_workpieces[row].name.isEmpty()
-                            ? m_workpieces[row].id
-                            : m_workpieces[row].name)
-                    : QVariant();
+                displayText = row >= 0 && row < m_workpieces.size()
+                    ? (m_workpieces[row].name.isEmpty()
+                        ? m_workpieces[row].id : m_workpieces[row].name)
+                    : QString();
+                break;
             case CoatingAnalysisNodeKind::ThicknessInfo:
-                return QVariant(thicknessInfoText(row));
+                displayText = thicknessInfoText(row);
+                break;
             default:
                 return QVariant();
             }
+            return QVariant(coatingAnalysisTranslate(m_languageCode, displayText));
         }
         if(role == Qt::ForegroundRole && kind == CoatingAnalysisNodeKind::Model) {
             if(row >= 0 && row < m_workpieces.size()) {
@@ -346,28 +362,28 @@ namespace robot_qt_viewer
             return QString();
         }
         const spraytrajectory::SprayPathPoint& point = (*m_waypoints)[index];
-        return QStringLiteral("#%1    t=%2 s    %3")
+        return coatingAnalysisTranslate(m_languageCode, QStringLiteral("#%1    t=%2 s    %3")
             .arg(index)
             .arg(point.time, 0, 'f', 2)
-            .arg(point.sprayEnabled ? QStringLiteral("spray") : QStringLiteral("stop"));
+            .arg(point.sprayEnabled ? QStringLiteral("spray") : QStringLiteral("stop")));
     }
 
     QString CoatingAnalysisTreeModel::trajectoryInfoText(int row) const
     {
         switch(row) {
         case 0:
-            return formatKeyValue(QStringLiteral("Points"),
-                QString::number(static_cast<qulonglong>(m_trajectoryInfo.pointCount)));
+            return coatingAnalysisTranslate(m_languageCode, formatKeyValue(QStringLiteral("Points"),
+                QString::number(static_cast<qulonglong>(m_trajectoryInfo.pointCount))));
         case 1:
-            return formatKeyValue(QStringLiteral("Duration"),
-                QStringLiteral("%1 s").arg(m_trajectoryInfo.durationSeconds, 0, 'f', 3));
+            return coatingAnalysisTranslate(m_languageCode, formatKeyValue(QStringLiteral("Duration"),
+                QStringLiteral("%1 s").arg(m_trajectoryInfo.durationSeconds, 0, 'f', 3)));
         case 2:
-            return formatKeyValue(QStringLiteral("Path length"),
-                QStringLiteral("%1 mm").arg(m_trajectoryInfo.pathLengthMeters * 1000.0, 0, 'f', 2));
+            return coatingAnalysisTranslate(m_languageCode, formatKeyValue(QStringLiteral("Path length"),
+                QStringLiteral("%1 mm").arg(m_trajectoryInfo.pathLengthMeters * 1000.0, 0, 'f', 2)));
         case 3:
-            return formatKeyValue(QStringLiteral("Avg speed"),
+            return coatingAnalysisTranslate(m_languageCode, formatKeyValue(QStringLiteral("Avg speed"),
                 QStringLiteral("%1 mm/s")
-                    .arg(m_trajectoryInfo.averageSpeedMetersPerSecond * 1000.0, 0, 'f', 2));
+                    .arg(m_trajectoryInfo.averageSpeedMetersPerSecond * 1000.0, 0, 'f', 2)));
         default:
             return QString();
         }
@@ -377,23 +393,23 @@ namespace robot_qt_viewer
     {
         switch(row) {
         case 0:
-            return formatKeyValue(QStringLiteral("Min"),
-                QStringLiteral("%1 um").arg(m_thicknessMetrics.minThickness * 1.0e6, 0, 'f', 1));
+            return coatingAnalysisTranslate(m_languageCode, formatKeyValue(QStringLiteral("Min"),
+                QStringLiteral("%1 um").arg(m_thicknessMetrics.minThickness * 1.0e6, 0, 'f', 1)));
         case 1:
-            return formatKeyValue(QStringLiteral("Max"),
-                QStringLiteral("%1 um").arg(m_thicknessMetrics.maxThickness * 1.0e6, 0, 'f', 1));
+            return coatingAnalysisTranslate(m_languageCode, formatKeyValue(QStringLiteral("Max"),
+                QStringLiteral("%1 um").arg(m_thicknessMetrics.maxThickness * 1.0e6, 0, 'f', 1)));
         case 2:
-            return formatKeyValue(QStringLiteral("Average"),
-                QStringLiteral("%1 um").arg(m_thicknessMetrics.averageThickness * 1.0e6, 0, 'f', 1));
+            return coatingAnalysisTranslate(m_languageCode, formatKeyValue(QStringLiteral("Average"),
+                QStringLiteral("%1 um").arg(m_thicknessMetrics.averageThickness * 1.0e6, 0, 'f', 1)));
         case 3:
-            return formatKeyValue(QStringLiteral("Coverage"),
-                QStringLiteral("%1%").arg(m_thicknessMetrics.coverageRatio * 100.0, 0, 'f', 1));
+            return coatingAnalysisTranslate(m_languageCode, formatKeyValue(QStringLiteral("Coverage"),
+                QStringLiteral("%1%").arg(m_thicknessMetrics.coverageRatio * 100.0, 0, 'f', 1)));
         case 4:
-            return formatKeyValue(QStringLiteral("Under-coated"),
-                QStringLiteral("%1%").arg(m_thicknessMetrics.underCoatedRatio * 100.0, 0, 'f', 1));
+            return coatingAnalysisTranslate(m_languageCode, formatKeyValue(QStringLiteral("Under-coated"),
+                QStringLiteral("%1%").arg(m_thicknessMetrics.underCoatedRatio * 100.0, 0, 'f', 1)));
         case 5:
-            return formatKeyValue(QStringLiteral("Over-coated"),
-                QStringLiteral("%1%").arg(m_thicknessMetrics.overCoatedRatio * 100.0, 0, 'f', 1));
+            return coatingAnalysisTranslate(m_languageCode, formatKeyValue(QStringLiteral("Over-coated"),
+                QStringLiteral("%1%").arg(m_thicknessMetrics.overCoatedRatio * 100.0, 0, 'f', 1)));
         default:
             return QString();
         }

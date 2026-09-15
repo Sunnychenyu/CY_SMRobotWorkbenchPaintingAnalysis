@@ -11,6 +11,7 @@
 
 class QOffscreenSurface;
 class QThread;
+class QString;
 
 namespace robot_qt_viewer
 {
@@ -22,7 +23,9 @@ namespace robot_qt_viewer
         explicit ThicknessPredictionJobController(QObject* parent = nullptr);
         ~ThicknessPredictionJobController() override;
 
-        bool start(spraythickness::ThicknessPredictionTask task);
+        bool start(
+            spraythickness::ThicknessPredictionTask task,
+            QString* errorMessage = nullptr);
         void cancel();
         bool isRunning() const;
 

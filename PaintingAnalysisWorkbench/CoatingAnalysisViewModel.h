@@ -64,6 +64,11 @@ namespace robot_qt_viewer
         bool canClearReference = false;
         bool canCheckReference = false;
         QString referenceStatus = QStringLiteral("Reference: not set");
+        bool simulationActive = false;
+        bool simulationRunning = false;
+        bool canRunSimulation = false;
+        bool canExportSimulation = false;
+        QString simulationDetails;
     };
 
     struct CoatingAnalysisInfoView
@@ -80,6 +85,9 @@ namespace robot_qt_viewer
         spraythickness::ThicknessMetrics thicknessMetrics;
         spraythickness::ThicknessPredictionTiming predictionTiming;
         QString validationDetails = QStringLiteral("No reference result.");
+        bool simulationActive = false;
+        QString simulationDetails;
+        double simulationThicknessVolumeCubicMillimeters = 0.0;
     };
 
     struct CoatingAnalysisVisibilityView

@@ -2,6 +2,7 @@
 
 #include "CoatingAnalysisSession.h"
 #include "PaintingAnalysisMeshAdapter.h"
+#include "SimulationExperiment.h"
 
 #include <QHash>
 #include <QObject>
@@ -46,6 +47,7 @@ namespace robot_qt_viewer
 
         void activate();
         void deactivate();
+        void setLanguageCode(const QString& languageCode);
         void handleEvent(const RobotQtViewerEvent& event);
         void handleSurfaceScalarHover(
             const QString& objectId,
@@ -133,6 +135,11 @@ namespace robot_qt_viewer
         bool rebuildAxisymmetricProfileReduction();
         void updateAxisymmetricProfileDebugState();
         void resetReferenceResult();
+        void enterSimulation();
+        void exitSimulation();
+        void rebuildSimulation(bool runAfterBuild = false, bool focusView = false);
+        void runSimulationPrediction();
+        void exportSimulationResult();
 
         void handleWaypointInfoRequested(int index);
         void handleModelVisibilityToggleRequested(const QString& objectId);
@@ -173,5 +180,13 @@ namespace robot_qt_viewer
         QString m_validationDetails = QStringLiteral("No reference result.");
         std::vector<QString> m_modelVisibilityOverrideIds;
         QHash<QString, bool> m_modelVisibility;
+        bool m_simulationActive = false;
+        SimulationExperimentData m_simulation;
+        bool m_simulationReady = false;
+        QString m_simulationReadyStatus;
+        QString m_simulationStatus;
+        QString m_languageCode{ QStringLiteral("en") };
+        CoatingAnalysisSession m_savedSimulationSession;
+        QHash<QString, bool> m_savedSimulationModelVisibility;
     };
 }

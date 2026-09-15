@@ -1,0 +1,302 @@
+#include "CoatingAnalysisLanguage.h"
+
+#include <QVector>
+
+#include <algorithm>
+
+namespace robot_qt_viewer
+{
+    namespace
+    {
+        struct TranslationEntry
+        {
+            const char* english;
+            const char* chinese;
+        };
+
+        const QVector<TranslationEntry>& entries()
+        {
+            static const QVector<TranslationEntry> value = {
+                {"Thickness Prediction", "厚度预测"},
+                {"Thickness Simulation", "厚度仿真"},
+                {"Spray Simulation", "喷涂仿真"},
+                {"Result Validation", "结果验证"},
+                {"Local Debug Display", "局部调试显示"},
+                {"Deposition Model", "沉积模型"},
+                {"Deposition", "沉积"},
+                {"Trajectory Sampling", "轨迹采样"},
+                {"Thermal History", "热历史"},
+                {"Computation", "计算"},
+                {"Simulation", "仿真"},
+                {"Prediction Input", "预测输入"},
+                {"Prediction", "预测"},
+                {"Workpiece", "工件"},
+                {"Visualize", "可视化"},
+                {"Model", "模型"},
+                {"Models", "模型列表"},
+                {"Trajectory", "轨迹"},
+                {"Waypoints", "轨迹点列表"},
+                {"Spray Points", "喷涂点"},
+                {"Thickness Cloud", "厚度云图"},
+                {"Thickness Pick", "厚度拾取"},
+                {"Cylinder surface", "圆柱面"},
+                {"Rotation axis", "旋转轴"},
+                {"Local sector", "局部扇区"},
+                {"Profile line", "母线"},
+                {"Calculation spray points", "参与计算的喷涂点"},
+                {"Complete - all spray points", "完整模型 - 全部喷涂点"},
+                {"Local - all spray points", "局部模型 - 全部喷涂点"},
+                {"Complete - spatial filtering", "完整模型 - 空间筛选"},
+                {"Local - spatial filtering", "局部模型 - 空间筛选"},
+                {"Axisymmetric profile - spatial filtering", "轴对称母线 - 空间筛选"},
+                {"Complete - candidate vertices", "完整模型 - 候选顶点"},
+                {"Adaptive mesh - candidate filtering", "自适应网格 - 候选筛选"},
+                {"Local candidates - full BVH", "局部候选顶点 - 完整 BVH"},
+                {"Complete model + all spray points", "完整模型 + 全部喷涂点"},
+                {"Local model + all spray points", "局部模型 + 全部喷涂点"},
+                {"Complete model + spatial-filtered spray points", "完整模型 + 空间筛选喷涂点"},
+                {"Local model + spatial-filtered spray points", "局部模型 + 空间筛选喷涂点"},
+                {"Axisymmetric profile samples + spatial-filtered spray points", "轴对称母线采样点 + 空间筛选喷涂点"},
+                {"Complete model + spatial-filtered spray points + candidate vertices", "完整模型 + 空间筛选喷涂点 + 候选顶点"},
+                {"Dense selected region + sparse outside mesh + candidate spray points/vertices", "选定区域密集网格 + 外部稀疏网格 + 候选喷涂点/顶点"},
+                {"Selected local vertices + candidate spray points/vertices + complete-model occlusion BVH", "选定局部顶点 + 候选喷涂点/顶点 + 完整模型遮挡 BVH"},
+                {"Paper Gaussian (GPU)", "论文高斯模型（GPU）"},
+                {"Original Points", "原始点"},
+                {"Resample by Time Step", "按时间步重采样"},
+                {"BVH shadow occlusion", "BVH 阴影遮挡"},
+                {"Thermal exposure history", "热历史修正"},
+                {"Override grid cell size", "覆盖网格单元尺寸"},
+                {"Grid cell (mm)", "网格单元（毫米）"},
+                {"Outside target vertex ratio", "目标区域外顶点比例"},
+                {"Rotation axis: Not configured", "旋转轴：未配置"},
+                {"Sectors", "扇区数量"},
+                {"Profile samples", "母线采样点"},
+                {"Pick surface and fit axis", "拾取圆柱面并拟合轴"},
+                {"Select profile prediction region", "选择母线预测区域"},
+                {"Preview local prediction inputs", "预览局部预测输入"},
+                {"Refresh local input preview", "刷新局部输入预览"},
+                {"Select prediction region", "选择预测区域"},
+                {"Select Profile Prediction Region", "选择母线预测区域"},
+                {"Draw a closed freeform boundary over the profile region. The selected boundary is predicted; outside it, final thickness is set to 0.", "请在母线区域上绘制闭合自由曲线。选中边界内参与预测，边界外最终厚度设为 0。"},
+                {"Select entire profile", "选择整个母线"},
+                {"Clear selection", "清空选择"},
+                {"Horizontal: radius (mm)   Vertical: axis coordinate (mm)", "横轴：半径（毫米）   纵轴：轴向坐标（毫米）"},
+                {"Waypoint", "轨迹点"},
+                {"Index", "索引"},
+                {"Time", "时间"},
+                {"Duration next", "到下一点时长"},
+                {"Position", "位置"},
+                {"Orientation", "姿态"},
+                {"Spray", "喷涂"},
+                {"Process ID", "工艺 ID"},
+                {"Target dist.", "目标距离"},
+                {"Target normal", "目标法向"},
+                {"Region ID", "区域 ID"},
+                {"On", "开启"},
+                {"Off", "关闭"},
+                {"(last waypoint)", "（最后一个轨迹点）"},
+                {"(none)", "（无）"},
+                {"Point spray", "点喷涂"},
+                {"Line scan", "线扫喷涂"},
+                {"Experiment", "实验类型"},
+                {"Plate side", "平板边长"},
+                {"Grid cell", "网格单元"},
+                {"Spray distance", "喷涂距离"},
+                {"Trajectory overrun", "轨迹超出距离"},
+                {"Incidence angle", "入射角"},
+                {"Azimuth", "方位角"},
+                {"Tool roll (local Z)", "喷枪滚转角（局部 Z）"},
+                {"Point duration", "点喷涂停留时间"},
+                {"Scan speed", "扫描速度"},
+                {"Scan passes (round trips)", "扫描遍数（往返次数）"},
+                {"Entry speed", "进入速度"},
+                {"Exit speed", "离开速度"},
+                {"Trajectory point interval", "轨迹点时间间隔"},
+                {"Simulation plate", "仿真平板"},
+                {"Simulation trajectory", "仿真轨迹"},
+                {"Simulation status", "仿真状态"},
+                {"No simulation thickness result yet.", "尚无仿真厚度结果。"},
+                {"Waiting for simulation...", "等待仿真..."},
+                {"Scan start X", "扫描起点 X"},
+                {"Scan start Y", "扫描起点 Y"},
+                {"Scan end X", "扫描终点 X"},
+                {"Scan end Y", "扫描终点 Y"},
+                {"Run simulation", "运行仿真"},
+                {"Export CSV", "导出 CSV"},
+                {"Target", "目标"},
+                {"Data", "数据"},
+                {"Debug Model", "调试模型"},
+                {"Debug Trajectory", "调试轨迹"},
+                {"Select Model File", "选择模型文件"},
+                {"Select Trajectory File", "选择轨迹文件"},
+                {"Sampling", "采样方式"},
+                {"Time step", "时间步长"},
+                {"Start Prediction", "开始预测"},
+                {"Cancel", "取消"},
+                {"Set as Reference", "设为基准"},
+                {"Clear Reference", "清空基准"},
+                {"Check Against Reference", "与基准对比"},
+                {"Reference: not set", "基准：未设置"},
+                {"Waypoint Info...", "轨迹点信息..."},
+                {"Set as Prediction Workpiece", "设为预测工件"},
+                {"Show / Hide Model", "显示/隐藏模型"},
+                {"Clear Result", "清空结果"},
+                {"No model loaded.", "尚未加载模型。"},
+                {"No trajectory loaded.", "尚未加载轨迹。"},
+                {"No thickness result yet.", "尚无厚度结果。"},
+                {"No computation data yet.", "尚无计算数据。"},
+                {"Simulation inactive.", "仿真未激活。"},
+                {"Enter simulation mode before running it.", "请先进入仿真模式。"},
+                {"Build the simulation plate before running it.", "请先生成仿真平板。"},
+                {"A thickness prediction is already running.", "厚度预测任务正在运行。"},
+                {"The simulation trajectory is empty. Rebuild the plate.", "仿真轨迹为空，请重新生成平板。"},
+                {"Failed to sample the simulation trajectory.", "仿真轨迹采样失败。"},
+                {"Plate side, cell size and trajectory point interval must be positive.", "平板边长、网格单元和轨迹点时间间隔必须为正数。"},
+                {"No reference result.", "无基准结果。"},
+                {"Rotation axis: ", "旋转轴："},
+                {"Manual axis", "手动轴"},
+                {"Fitted axis", "拟合轴"},
+                {"Amplitude", "幅值"},
+                {"Rotation", "旋转"},
+                {"Phi offset", "Phi 偏移"},
+                {"Psi offset", "Psi 偏移"},
+                {"Sigma phi", "Sigma Phi"},
+                {"Sigma psi", "Sigma Psi"},
+                {"Ref distance", "参考距离"},
+                {"Ref angle", "参考角度"},
+                {"Ref exposure", "参考曝光"},
+                {"Correction amp", "修正幅值"},
+                {"History scale", "历史尺度"},
+                {"Ref history", "参考历史"},
+                {"Cooling time", "冷却时间"},
+                {"Activity thr", "活跃阈值"},
+                {"Wall time", "墙钟时间"},
+                {"Volume", "体积"},
+                {"Backend", "后端"},
+                {"BVH", "BVH"},
+                {"Upload", "上传"},
+                {"Dispatch", "调度"},
+                {"Pure GPU", "纯 GPU"},
+                {"Readback", "回读"},
+                {"Batch", "批次"},
+                {"Inputs", "输入"},
+                {"Mapping", "映射"},
+                {"Axis map", "轴映射"},
+                {"Axis bind", "轴绑定"},
+                {"Axis zero", "轴零值"},
+                {"Axis invalid", "轴无效"},
+                {"Axis parts", "轴分段"},
+                {"Grid", "网格"},
+                {"Grid mode", "网格模式"},
+                {"Grid size", "网格尺寸"},
+                {"Grid dim", "网格维度"},
+                {"Grid cells", "网格单元数"},
+                {"Cell refs", "单元引用"},
+                {"Vertex refs", "顶点引用"},
+                {"GPU vertices", "GPU 顶点"},
+                {"Skipped zero", "跳过零值"},
+                {"Grid cache", "网格缓存"},
+                {"cache hit", "命中缓存"},
+                {"automatic", "自动"},
+                {"manual", "手动"},
+                {"built", "已构建"},
+                {"hit", "命中"},
+                {"Vertex", "顶点"},
+                {"Thickness", "厚度"},
+                {"Relative error", "相对误差"},
+                {"Reference ready", "基准已就绪"},
+                {"Vertices", "顶点数"},
+                {"Active", "有效数"},
+                {"Min", "最小"},
+                {"Max", "最大"},
+                {"Average", "平均"},
+                {"Coverage", "覆盖率"},
+                {"Under-coated", "欠涂"},
+                {"Over-coated", "过涂"},
+                {"Points", "点数"},
+                {"Duration", "时长"},
+                {"Path length", "路径长度"},
+                {"Avg speed", "平均速度"},
+                {"Poses", "位姿数"},
+                {"No robot", "未选择机器人"},
+                {"Load a model and trajectory to begin.", "请加载模型和轨迹以开始。"},
+                {"Run a prediction before setting a reference.", "请先运行预测，再设置基准。"},
+                {"Set a reference result before checking this prediction.", "请先设置基准结果，再检查当前预测。"},
+                {"Run prediction before checking it against the reference.", "请先运行预测，再与基准对比。"},
+                {"Current prediction stored as the reference result.", "当前预测已保存为基准结果。"},
+                {"Reference result cleared.", "基准结果已清空。"},
+                {"Model loaded. Load a trajectory and run thickness prediction.", "模型已加载。请加载轨迹并运行厚度预测。"},
+                {"Trajectory loaded. Ready for GPU thickness prediction.", "轨迹已加载，可以进行 GPU 厚度预测。"},
+                {"Preparing GPU thickness prediction...", "正在准备 GPU 厚度预测..."},
+                {"Canceling GPU thickness prediction...", "正在取消 GPU 厚度预测..."},
+                {"GPU thickness prediction completed in %1 s.", "GPU 厚度预测完成，用时 %1 秒。"},
+                {"GPU thickness prediction failed.", "GPU 厚度预测失败。"},
+                {"GPU thickness prediction produced no result.", "GPU 厚度预测未产生结果。"},
+                {"Failed to start the GPU thickness prediction task.", "无法启动 GPU 厚度预测任务。"},
+                {"Thickness result cleared.", "厚度结果已清空。"},
+                {"The model has no mesh vertices.", "模型没有网格顶点。"},
+                {"The analysis model or viewport is no longer available.", "分析模型或视口已不可用。"},
+                {"The analysis model, trajectory, or viewport is unavailable.", "分析模型、轨迹或视口不可用。"},
+                {"Model file was not found: ", "未找到模型文件："},
+                {"Spray trajectory was not found: ", "未找到喷涂轨迹："},
+                {"Existing model reused. Run thickness prediction.", "已复用现有模型。请运行厚度预测。"},
+                {"Click a cylindrical side face in the viewport.", "请在视口中点击圆柱侧面。"},
+                {"Rotation axis changed. Select the profile prediction region again.", "旋转轴已改变，请重新选择母线预测区域。"},
+                {"Rotation axis changed. Select the dense prediction region again.", "旋转轴已改变，请重新选择密集预测区域。"},
+                {"Draw a closed freeform profile region before accepting.", "请先绘制闭合的自由曲线母线区域，再确认。"},
+                {"Running spray simulation...", "正在运行喷涂仿真..."},
+                {"Failed to start spray simulation.", "无法启动喷涂仿真。"},
+                {"Simulation mode active.", "仿真模式已激活。"},
+                {"Exited spray simulation mode.", "已退出喷涂仿真模式。"},
+                {"Validation completed for %1 vertices.", "已完成 %1 个顶点的验证。"},
+                {"Validation stopped: no active current vertices.", "验证已停止：当前没有有效顶点。"},
+                {"Validation stopped: vertex index mapping differs.", "验证已停止：顶点索引映射不一致。"},
+                {"Validation stopped: complete-model vertex counts differ.", "验证已停止：完整模型顶点数不一致。"},
+                {"Validation unavailable", "无法验证"}
+                ,{"Adaptive mesh cache hit; simplification skipped.", "自适应网格缓存命中，跳过简化。"}
+                ,{"Spatial grid cache hit:", "空间网格缓存命中："}
+                ,{"Spatial grid ready:", "空间网格已就绪："}
+                ,{"Failed to load the spray trajectory.", "喷涂轨迹加载失败。"}
+                ,{"Failed to display the thickness result.", "厚度结果显示失败。"}
+                ,{"Failed to re-apply the thickness overlay.", "重新应用厚度覆盖层失败。"}
+                ,{"Profile extraction failed: ", "母线提取失败："}
+                ,{"Profile region preparation failed: ", "母线区域准备失败："}
+                ,{"Local input preview failed: ", "局部输入预览失败："}
+                ,{"Cylindrical fit failed: ", "圆柱拟合失败："}
+                ,{"The picked object is not a workpiece.", "拾取的对象不是工件。"}
+                ,{"Simulation export failed: ", "仿真导出失败："}
+                ,{"Simulation thickness exported to ", "仿真厚度已导出到 "}
+                ,{"Failed to start spray simulation.", "无法启动喷涂仿真。"}
+                ,{"Failed to re-apply the thickness overlay.", "重新应用厚度覆盖层失败。"}
+            };
+            return value;
+        }
+    }
+
+    QString coatingAnalysisTranslate(const QString& languageCode, const QString& text)
+    {
+        const bool chinese = languageCode.toLower().startsWith(QStringLiteral("zh"));
+        QString result = text;
+        const auto& dictionary = entries();
+        QVector<const TranslationEntry*> ordered;
+        ordered.reserve(dictionary.size());
+        for(const TranslationEntry& entry : dictionary) {
+            ordered.push_back(&entry);
+        }
+        std::sort(ordered.begin(), ordered.end(), [](const TranslationEntry* left,
+            const TranslationEntry* right) {
+            return std::char_traits<char>::length(left->english)
+                > std::char_traits<char>::length(right->english);
+        });
+        for(const TranslationEntry* entry : ordered) {
+            const QString source = QString::fromUtf8(
+                chinese ? entry->english : entry->chinese);
+            const QString target = QString::fromUtf8(
+                chinese ? entry->chinese : entry->english);
+            if(!source.isEmpty()) {
+                result.replace(source, target);
+            }
+        }
+        return result;
+    }
+}

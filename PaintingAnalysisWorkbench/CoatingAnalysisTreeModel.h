@@ -34,6 +34,7 @@ namespace robot_qt_viewer
 
     public:
         explicit CoatingAnalysisTreeModel(QObject* parent = nullptr);
+        void setLanguageCode(const QString& languageCode);
 
         void setTrajectory(
             const QString& name,
@@ -93,5 +94,6 @@ namespace robot_qt_viewer
         spraythickness::ThicknessMetrics m_thicknessMetrics;
         const std::vector<spraytrajectory::SprayPathPoint>* m_waypoints = nullptr;
         int m_loadedWaypointCount = 0;
+        QString m_languageCode{ QStringLiteral("en") };
     };
 }

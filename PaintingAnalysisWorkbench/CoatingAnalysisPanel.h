@@ -5,8 +5,11 @@
 #include <SprayThicknessPrediction/ThicknessPrediction.h>
 
 #include <QWidget>
+#include <QVector>
 
 #include <cstddef>
+
+#include "SimulationExperiment.h"
 
 class QCheckBox;
 class QComboBox;
@@ -16,6 +19,7 @@ class QLabel;
 class QProgressBar;
 class QPushButton;
 class QSpinBox;
+class QTabBar;
 
 namespace robot_qt_viewer
 {
@@ -44,6 +48,7 @@ namespace robot_qt_viewer
     public:
         explicit CoatingAnalysisPanel(QWidget* parent = nullptr);
         void applyViewModel(const CoatingAnalysisViewModel& viewModel);
+        void setLanguageCode(const QString& languageCode);
 
         spraythickness::ThicknessModelKind thicknessModel() const;
         spraythickness::TrajectorySamplingMode trajectorySamplingMode() const;
@@ -66,6 +71,8 @@ namespace robot_qt_viewer
         std::size_t periodicSectorCount() const;
         std::size_t axisymmetricProfileSampleCount() const;
         QString selectedWorkpieceId() const;
+        SimulationExperimentParameters simulationParameters() const;
+        bool simulationActive() const;
 
     signals:
         void openModelRequested();
@@ -91,10 +98,16 @@ namespace robot_qt_viewer
             bool sprayPoints);
         void workpieceChanged(const QString& objectId);
         void rotationSurfacePickRequested();
+        void enterSimulationRequested();
+        void exitSimulationRequested();
+        void simulationParametersChanged();
+        void simulationPredictionRequested();
+        void simulationExportRequested();
 
     private:
         void refreshDepositionCurve();
         void emitLocalDebugVisibilityChanged();
+        void setModeTab(int index);
 
         QComboBox* m_workpieceCombo = nullptr;
         QComboBox* m_algorithmCombo = nullptr;
@@ -137,5 +150,30 @@ namespace robot_qt_viewer
         QPushButton* m_clearReferenceButton = nullptr;
         QPushButton* m_checkReferenceButton = nullptr;
         QLabel* m_referenceStatusLabel = nullptr;
+        QGroupBox* m_simulationGroup = nullptr;
+        QComboBox* m_simulationKindCombo = nullptr;
+        QDoubleSpinBox* m_plateSideSpinBox = nullptr;
+        QDoubleSpinBox* m_plateCellSpinBox = nullptr;
+        QDoubleSpinBox* m_simulationDistanceSpinBox = nullptr;
+        QDoubleSpinBox* m_trajectoryOverrunSpinBox = nullptr;
+        QDoubleSpinBox* m_simulationIncidenceSpinBox = nullptr;
+        QDoubleSpinBox* m_simulationAzimuthSpinBox = nullptr;
+        QDoubleSpinBox* m_simulationToolRollSpinBox = nullptr;
+        QDoubleSpinBox* m_pointDurationSpinBox = nullptr;
+        QDoubleSpinBox* m_scanSpeedSpinBox = nullptr;
+        QSpinBox* m_scanPassCountSpinBox = nullptr;
+        QDoubleSpinBox* m_entrySpeedSpinBox = nullptr;
+        QDoubleSpinBox* m_exitSpeedSpinBox = nullptr;
+        QDoubleSpinBox* m_trajectoryPointIntervalSpinBox = nullptr;
+        QDoubleSpinBox* m_scanStartXSpinBox = nullptr;
+        QDoubleSpinBox* m_scanStartYSpinBox = nullptr;
+        QDoubleSpinBox* m_scanEndXSpinBox = nullptr;
+        QDoubleSpinBox* m_scanEndYSpinBox = nullptr;
+        QPushButton* m_runSimulationButton = nullptr;
+        QPushButton* m_exportSimulationButton = nullptr;
+        bool m_simulationActive = false;
+        QTabBar* m_modeTabBar = nullptr;
+        QVector<QWidget*> m_predictionSections;
+        QString m_languageCode{ QStringLiteral("en") };
     };
 }

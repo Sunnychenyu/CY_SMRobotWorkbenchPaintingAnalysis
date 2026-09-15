@@ -18,6 +18,7 @@ namespace robot_qt_viewer
             QWidget* parent = nullptr);
 
         spraythickness::opengl::AxisymmetricProfileSelection selection() const;
+        void setLanguageCode(const QString& languageCode);
 
     private:
         class ProfileCanvas;

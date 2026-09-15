@@ -4,6 +4,8 @@ set(TARGET_NAME PaintingAnalysisWorkbench)
 set(CMAKE_AUTOMOC ON)
 
 set(SOURCES
+    CoatingAnalysisLanguage.cpp
+    CoatingAnalysisLanguage.h
     CoatingAnalysisInfoPanel.cpp
     CoatingAnalysisInfoPanel.h
     AxisymmetricProfileSelectionDialog.cpp
@@ -20,6 +22,8 @@ set(SOURCES
     CoatingAnalysisViewModel.h
     CoatingAnalysisVisibilityBar.cpp
     CoatingAnalysisVisibilityBar.h
+    SimulationExperiment.cpp
+    SimulationExperiment.h
     CoatingAnalysisWaypointDialog.cpp
     CoatingAnalysisWaypointDialog.h
     DepositionCurveWidget.cpp
@@ -60,6 +64,10 @@ target_link_libraries(${TARGET_NAME}
 )
 
 target_compile_features(${TARGET_NAME} PUBLIC cxx_std_17)
+
+if(MSVC)
+    target_compile_options(${TARGET_NAME} PRIVATE /utf-8)
+endif()
 
 set_target_properties(${TARGET_NAME} PROPERTIES
     FOLDER SMRobotWorkbenchPaintingAnalysis

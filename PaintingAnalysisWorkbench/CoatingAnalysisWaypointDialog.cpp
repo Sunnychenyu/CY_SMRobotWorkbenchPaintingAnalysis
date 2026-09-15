@@ -1,4 +1,5 @@
 #include "CoatingAnalysisWaypointDialog.h"
+#include "CoatingAnalysisLanguage.h"
 
 #include <Eigen/Geometry>
 
@@ -24,6 +25,15 @@ namespace robot_qt_viewer
         m_textLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
         m_textLabel->setStyleSheet(QStringLiteral("font-family: Consolas, monospace;"));
         layout->addWidget(m_textLabel);
+        setLanguageCode(QStringLiteral("en"));
+    }
+
+    void CoatingAnalysisWaypointDialog::setLanguageCode(const QString& languageCode)
+    {
+        m_languageCode = languageCode.toLower().startsWith(QStringLiteral("zh"))
+            ? QStringLiteral("zh-CN") : QStringLiteral("en");
+        setWindowTitle(coatingAnalysisTranslate(m_languageCode, windowTitle()));
+        m_textLabel->setText(coatingAnalysisTranslate(m_languageCode, m_textLabel->text()));
     }
 
     void CoatingAnalysisWaypointDialog::setWaypoint(
@@ -68,6 +78,6 @@ namespace robot_qt_viewer
             .arg(point.workpieceRegionId >= 0
                 ? QString::number(point.workpieceRegionId)
                 : QStringLiteral("(none)"));
-        m_textLabel->setText(text);
+        m_textLabel->setText(coatingAnalysisTranslate(m_languageCode, text));
     }
 }

@@ -1,4 +1,5 @@
 #include "CoatingAnalysisInfoPanel.h"
+#include "CoatingAnalysisLanguage.h"
 
 #include <SprayThicknessPrediction/ThicknessPrediction.h>
 
@@ -25,9 +26,9 @@ namespace robot_qt_viewer
         layout->setContentsMargins(10, 8, 10, 8);
         layout->setSpacing(4);
 
-        addSection(layout, QStringLiteral("Model"));
+        m_modelSection = addSection(layout, QStringLiteral("Model"));
         m_modelReadout = addReadout(layout);
-        addSection(layout, QStringLiteral("Trajectory"));
+        m_trajectorySection = addSection(layout, QStringLiteral("Trajectory"));
         m_trajectoryReadout = addReadout(layout);
         addSection(layout, QStringLiteral("Deposition"));
         m_depositionReadout = addReadout(layout);
@@ -37,8 +38,10 @@ namespace robot_qt_viewer
         m_thicknessReadout = addReadout(layout);
         addSection(layout, QStringLiteral("Computation"));
         m_computationReadout = addReadout(layout);
-        addSection(layout, QStringLiteral("Validation"));
+        m_validationSection = addSection(layout, QStringLiteral("Validation"));
         m_validationReadout = addReadout(layout);
+        m_simulationSection = addSection(layout, QStringLiteral("Simulation"));
+        m_simulationReadout = addReadout(layout);
         layout->addStretch(1);
 
         {
@@ -77,6 +80,16 @@ namespace robot_qt_viewer
                     .arg(parameters.coolingTimeSeconds, 0, 'g', 6)
                     .arg(parameters.activityThresholdRatio, 0, 'g', 6));
         }
+        setLanguageCode(QStringLiteral("en"));
+    }
+
+    void CoatingAnalysisInfoPanel::setLanguageCode(const QString& languageCode)
+    {
+        m_languageCode = languageCode.toLower().startsWith(QStringLiteral("zh"))
+            ? QStringLiteral("zh-CN") : QStringLiteral("en");
+        for(QLabel* label : findChildren<QLabel*>()) {
+            label->setText(coatingAnalysisTranslate(m_languageCode, label->text()));
+        }
     }
 
     QLabel* CoatingAnalysisInfoPanel::addSection(QVBoxLayout* layout, const QString& title)
@@ -99,6 +112,29 @@ namespace robot_qt_viewer
 
     void CoatingAnalysisInfoPanel::applyInfo(const CoatingAnalysisInfoView& view)
     {
+        const bool simulation = view.simulationActive;
+        if(m_modelSection != nullptr) {
+            m_modelSection->setText(simulation
+                ? QStringLiteral("Simulation plate")
+                : QStringLiteral("Model"));
+        }
+        if(m_trajectorySection != nullptr) {
+            m_trajectorySection->setText(simulation
+                ? QStringLiteral("Simulation trajectory")
+                : QStringLiteral("Trajectory"));
+        }
+        if(m_simulationSection != nullptr) {
+            m_simulationSection->setText(simulation
+                ? QStringLiteral("Simulation status")
+                : QStringLiteral("Simulation"));
+        }
+        if(m_validationSection != nullptr) {
+            m_validationSection->setVisible(!simulation);
+        }
+        if(m_validationReadout != nullptr) {
+            m_validationReadout->setVisible(!simulation);
+        }
+
         if(view.hasModel) {
             const CoatingAnalysisModelInfo& info = view.modelInfo;
             m_modelReadout->setText(
@@ -149,6 +185,11 @@ namespace robot_qt_viewer
             QStringList lines;
             lines << QStringLiteral("Wall time : %1 s")
                          .arg(view.predictionElapsedSeconds, 0, 'f', 3);
+            if(simulation) {
+                lines << QStringLiteral("Volume    : %1 mm3")
+                             .arg(view.simulationThicknessVolumeCubicMillimeters,
+                                 0, 'f', 6);
+            }
             if(timing.valid) {
                 lines << QStringLiteral("Backend   : %1 ms")
                              .arg(timing.backendTotalMilliseconds, 0, 'f', 1)
@@ -233,9 +274,17 @@ namespace robot_qt_viewer
             }
             m_computationReadout->setText(lines.join(QStringLiteral("\n")));
         } else {
-            m_thicknessReadout->setText(QStringLiteral("No thickness result yet."));
-            m_computationReadout->setText(QStringLiteral("No computation data yet."));
+            m_thicknessReadout->setText(simulation
+                ? QStringLiteral("No simulation thickness result yet.")
+                : QStringLiteral("No thickness result yet."));
+            m_computationReadout->setText(simulation
+                ? QStringLiteral("Waiting for simulation...")
+                : QStringLiteral("No computation data yet."));
         }
         m_validationReadout->setText(view.validationDetails);
+        m_simulationReadout->setText(view.simulationActive
+            ? view.simulationDetails
+            : QStringLiteral("Simulation inactive."));
+        setLanguageCode(m_languageCode);
     }
 }

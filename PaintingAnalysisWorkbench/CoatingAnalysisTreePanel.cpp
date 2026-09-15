@@ -1,6 +1,7 @@
 #include "CoatingAnalysisTreePanel.h"
 
 #include "CoatingAnalysisTreeModel.h"
+#include "CoatingAnalysisLanguage.h"
 
 #include <QAction>
 #include <QMenu>
@@ -26,6 +27,13 @@ namespace robot_qt_viewer
 
         connect(m_treeView, &QTreeView::customContextMenuRequested,
             this, &CoatingAnalysisTreePanel::showContextMenu);
+    }
+
+    void CoatingAnalysisTreePanel::setLanguageCode(const QString& languageCode)
+    {
+        m_languageCode = languageCode.toLower().startsWith(QStringLiteral("zh"))
+            ? QStringLiteral("zh-CN") : QStringLiteral("en");
+        m_model->setLanguageCode(languageCode);
     }
 
     void CoatingAnalysisTreePanel::applyTreeView(const CoatingAnalysisTreeView& view)
@@ -55,7 +63,8 @@ namespace robot_qt_viewer
         switch(kind) {
         case CoatingAnalysisNodeKind::Waypoint: {
             const int waypointIndex = m_model->waypointIndex(index);
-            action = menu.addAction(QStringLiteral("Waypoint Info..."));
+            action = menu.addAction(coatingAnalysisTranslate(
+                m_languageCode, QStringLiteral("Waypoint Info...")));
             connect(action, &QAction::triggered, this, [this, waypointIndex]() {
                 if(waypointIndex >= 0) {
                     emit waypointInfoRequested(waypointIndex);
@@ -68,18 +77,21 @@ namespace robot_qt_viewer
             if(objectId.isEmpty()) {
                 return;
             }
-            action = menu.addAction(QStringLiteral("Set as Prediction Workpiece"));
+            action = menu.addAction(coatingAnalysisTranslate(
+                m_languageCode, QStringLiteral("Set as Prediction Workpiece")));
             connect(action, &QAction::triggered, this, [this, objectId]() {
                 emit modelSetAsWorkpiece(objectId);
             });
-            action = menu.addAction(QStringLiteral("Show / Hide Model"));
+            action = menu.addAction(coatingAnalysisTranslate(
+                m_languageCode, QStringLiteral("Show / Hide Model")));
             connect(action, &QAction::triggered, this, [this, objectId]() {
                 emit modelVisibilityToggleRequested(objectId);
             });
             break;
         }
         case CoatingAnalysisNodeKind::Thickness: {
-            action = menu.addAction(QStringLiteral("Clear Result"));
+            action = menu.addAction(coatingAnalysisTranslate(
+                m_languageCode, QStringLiteral("Clear Result")));
             connect(action, &QAction::triggered, this, &CoatingAnalysisTreePanel::thicknessClearRequested);
             break;
         }

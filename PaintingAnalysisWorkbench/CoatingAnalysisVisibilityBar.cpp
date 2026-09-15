@@ -1,4 +1,5 @@
 #include "CoatingAnalysisVisibilityBar.h"
+#include "CoatingAnalysisLanguage.h"
 
 #include <QCheckBox>
 #include <QHBoxLayout>
@@ -36,6 +37,20 @@ namespace robot_qt_viewer
             this, &CoatingAnalysisVisibilityBar::showThicknessChanged);
         connect(m_thicknessPick, &QCheckBox::toggled,
             this, &CoatingAnalysisVisibilityBar::thicknessPickChanged);
+        setLanguageCode(QStringLiteral("en"));
+    }
+
+    void CoatingAnalysisVisibilityBar::setLanguageCode(const QString& languageCode)
+    {
+        m_languageCode = languageCode.toLower().startsWith(QStringLiteral("zh"))
+            ? QStringLiteral("zh-CN") : QStringLiteral("en");
+        for(QWidget* widget : findChildren<QWidget*>()) {
+            if(auto* button = qobject_cast<QAbstractButton*>(widget)) {
+                button->setText(coatingAnalysisTranslate(m_languageCode, button->text()));
+            } else if(auto* label = qobject_cast<QLabel*>(widget)) {
+                label->setText(coatingAnalysisTranslate(m_languageCode, label->text()));
+            }
+        }
     }
 
     void CoatingAnalysisVisibilityBar::applyVisibility(const CoatingAnalysisVisibilityView& view)

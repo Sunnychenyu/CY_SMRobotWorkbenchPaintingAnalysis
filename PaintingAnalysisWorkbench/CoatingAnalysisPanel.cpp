@@ -1,6 +1,7 @@
 #include "CoatingAnalysisPanel.h"
 
 #include "DepositionCurveWidget.h"
+#include "CoatingAnalysisLanguage.h"
 
 #include <QCheckBox>
 #include <QComboBox>
@@ -15,16 +16,177 @@
 #include <QSignalBlocker>
 #include <QSizePolicy>
 #include <QSpinBox>
+#include <QTabBar>
 #include <QVBoxLayout>
+#include <QAbstractButton>
+#include <QAbstractSpinBox>
 
 namespace robot_qt_viewer
 {
     CoatingAnalysisPanel::CoatingAnalysisPanel(QWidget* parent)
         : QWidget(parent)
     {
+        setMinimumSize(0, 0);
+        setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
         auto* rootLayout = new QVBoxLayout(this);
         rootLayout->setContentsMargins(6, 4, 6, 6);
         rootLayout->setSpacing(6);
+
+        m_simulationGroup = new QGroupBox(QStringLiteral("Spray Simulation"), this);
+        auto* simulationLayout = new QVBoxLayout(m_simulationGroup);
+        simulationLayout->setContentsMargins(8, 6, 8, 6);
+        simulationLayout->setSpacing(4);
+        auto* simulationForm = new QFormLayout();
+        simulationForm->setHorizontalSpacing(6);
+        simulationForm->setVerticalSpacing(3);
+        simulationForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+        m_simulationKindCombo = new QComboBox(m_simulationGroup);
+        m_simulationKindCombo->addItem(QStringLiteral("Point spray"),
+            static_cast<int>(SimulationExperimentKind::PointSpray));
+        m_simulationKindCombo->addItem(QStringLiteral("Line scan"),
+            static_cast<int>(SimulationExperimentKind::LineScan));
+        m_simulationKindCombo->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+        auto makeSimulationSpin = [this](double minimum, double maximum, double value,
+                                         int decimals, double step, const QString& suffix) {
+            auto* spin = new QDoubleSpinBox(m_simulationGroup);
+            spin->setRange(minimum, maximum);
+            spin->setDecimals(decimals);
+            spin->setSingleStep(step);
+            spin->setValue(value);
+            spin->setSuffix(suffix);
+            spin->setMinimumWidth(0);
+            spin->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+            return spin;
+        };
+        m_plateSideSpinBox = makeSimulationSpin(1.0, 100000.0, 200.0, 2, 10.0, QStringLiteral(" mm"));
+        m_plateCellSpinBox = makeSimulationSpin(0.01, 10000.0, 2.0, 3, 0.5, QStringLiteral(" mm"));
+        m_simulationDistanceSpinBox = makeSimulationSpin(0.01, 10000.0, 100.0, 2, 5.0, QStringLiteral(" mm"));
+        m_trajectoryOverrunSpinBox = makeSimulationSpin(0.1, 100000.0, 20.0, 2, 5.0, QStringLiteral(" mm"));
+        m_simulationIncidenceSpinBox = makeSimulationSpin(0.0, 90.0, 90.0, 1, 1.0, QStringLiteral(" deg"));
+        m_simulationAzimuthSpinBox = makeSimulationSpin(-180.0, 180.0, 0.0, 1, 5.0, QStringLiteral(" deg"));
+        m_simulationToolRollSpinBox = makeSimulationSpin(-180.0, 180.0, 0.0, 1, 5.0, QStringLiteral(" deg"));
+        m_pointDurationSpinBox = makeSimulationSpin(0.001, 3600.0, 4.0, 3, 0.1, QStringLiteral(" s"));
+        m_scanSpeedSpinBox = makeSimulationSpin(0.01, 100000.0, 20.0, 2, 1.0, QStringLiteral(" mm/s"));
+        m_scanPassCountSpinBox = new QSpinBox(m_simulationGroup);
+        m_scanPassCountSpinBox->setRange(1, 1000);
+        m_scanPassCountSpinBox->setSingleStep(1);
+        m_scanPassCountSpinBox->setValue(1);
+        m_scanPassCountSpinBox->setSuffix(QStringLiteral(" passes"));
+        m_scanPassCountSpinBox->setMinimumWidth(0);
+        m_scanPassCountSpinBox->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+        m_entrySpeedSpinBox = makeSimulationSpin(0.01, 100000.0, 20.0, 1, 1.0, QStringLiteral(" mm/s"));
+        m_exitSpeedSpinBox = makeSimulationSpin(0.01, 100000.0, 20.0, 1, 1.0, QStringLiteral(" mm/s"));
+        m_trajectoryPointIntervalSpinBox = makeSimulationSpin(0.001, 10.0, 0.02, 3, 0.01, QStringLiteral(" s"));
+        m_scanStartXSpinBox = makeSimulationSpin(-100000.0, 100000.0, -50.0, 2, 5.0, QStringLiteral(" mm"));
+        m_scanStartYSpinBox = makeSimulationSpin(-100000.0, 100000.0, 0.0, 2, 5.0, QStringLiteral(" mm"));
+        m_scanEndXSpinBox = makeSimulationSpin(-100000.0, 100000.0, 50.0, 2, 5.0, QStringLiteral(" mm"));
+        m_scanEndYSpinBox = makeSimulationSpin(-100000.0, 100000.0, 0.0, 2, 5.0, QStringLiteral(" mm"));
+        const auto addSimulationRow = [simulationForm](const QString& label, QWidget* field) {
+            simulationForm->addRow(label, field);
+            return simulationForm->labelForField(field);
+        };
+        addSimulationRow(QStringLiteral("Experiment"), m_simulationKindCombo);
+        addSimulationRow(QStringLiteral("Plate side"), m_plateSideSpinBox);
+        addSimulationRow(QStringLiteral("Grid cell"), m_plateCellSpinBox);
+        addSimulationRow(QStringLiteral("Spray distance"), m_simulationDistanceSpinBox);
+        addSimulationRow(QStringLiteral("Trajectory overrun"), m_trajectoryOverrunSpinBox);
+        addSimulationRow(QStringLiteral("Incidence angle"), m_simulationIncidenceSpinBox);
+        addSimulationRow(QStringLiteral("Azimuth"), m_simulationAzimuthSpinBox);
+        addSimulationRow(QStringLiteral("Tool roll (local Z)"), m_simulationToolRollSpinBox);
+        QWidget* pointDurationLabel =
+            addSimulationRow(QStringLiteral("Point duration"), m_pointDurationSpinBox);
+        QWidget* scanSpeedLabel =
+            addSimulationRow(QStringLiteral("Scan speed"), m_scanSpeedSpinBox);
+        QWidget* scanPassCountLabel = addSimulationRow(
+            QStringLiteral("Scan passes (round trips)"), m_scanPassCountSpinBox);
+        QWidget* entrySpeedLabel =
+            addSimulationRow(QStringLiteral("Entry speed"), m_entrySpeedSpinBox);
+        QWidget* exitSpeedLabel =
+            addSimulationRow(QStringLiteral("Exit speed"), m_exitSpeedSpinBox);
+        addSimulationRow(QStringLiteral("Trajectory point interval"),
+            m_trajectoryPointIntervalSpinBox);
+        QWidget* scanStartXLabel =
+            addSimulationRow(QStringLiteral("Scan start X"), m_scanStartXSpinBox);
+        QWidget* scanStartYLabel =
+            addSimulationRow(QStringLiteral("Scan start Y"), m_scanStartYSpinBox);
+        QWidget* scanEndXLabel =
+            addSimulationRow(QStringLiteral("Scan end X"), m_scanEndXSpinBox);
+        QWidget* scanEndYLabel =
+            addSimulationRow(QStringLiteral("Scan end Y"), m_scanEndYSpinBox);
+        simulationLayout->addLayout(simulationForm);
+        auto* simulationButtons = new QGridLayout();
+        m_runSimulationButton = new QPushButton(QStringLiteral("Run simulation"), m_simulationGroup);
+        m_exportSimulationButton = new QPushButton(QStringLiteral("Export CSV"), m_simulationGroup);
+        for(QPushButton* button : { m_runSimulationButton, m_exportSimulationButton }) {
+            button->setMinimumWidth(0);
+            button->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+        }
+        simulationButtons->addWidget(m_runSimulationButton, 0, 0, 1, 2);
+        simulationButtons->addWidget(m_exportSimulationButton, 1, 0, 1, 2);
+        simulationLayout->addLayout(simulationButtons);
+        m_simulationGroup->setMinimumSize(0, 0);
+        m_simulationGroup->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+        rootLayout->addWidget(m_simulationGroup);
+        const auto simulationParameterChanged = [this]() { emit simulationParametersChanged(); };
+        const auto updateSimulationModeUi = [this, simulationParameterChanged,
+            pointDurationLabel, scanSpeedLabel, scanPassCountLabel,
+            entrySpeedLabel, exitSpeedLabel,
+            scanStartXLabel, scanStartYLabel, scanEndXLabel, scanEndYLabel](int) {
+                const bool line = m_simulationKindCombo->currentData().toInt()
+                    == static_cast<int>(SimulationExperimentKind::LineScan);
+                const auto setRowVisible = [](QWidget* label, QWidget* field, bool visible) {
+                    if(label != nullptr) {
+                        label->setVisible(visible);
+                    }
+                    field->setVisible(visible);
+                };
+                setRowVisible(pointDurationLabel, m_pointDurationSpinBox, !line);
+                setRowVisible(scanSpeedLabel, m_scanSpeedSpinBox, line);
+                setRowVisible(scanPassCountLabel, m_scanPassCountSpinBox, line);
+                // Both experiments start and stop spraying outside the plate.
+                // Point spraying differs only in the center dwell, so its
+                // entry/exit speeds are also part of the trajectory controls.
+                setRowVisible(entrySpeedLabel, m_entrySpeedSpinBox, true);
+                setRowVisible(exitSpeedLabel, m_exitSpeedSpinBox, true);
+                setRowVisible(scanStartXLabel, m_scanStartXSpinBox, line);
+                setRowVisible(scanStartYLabel, m_scanStartYSpinBox, line);
+                setRowVisible(scanEndXLabel, m_scanEndXSpinBox, line);
+                setRowVisible(scanEndYLabel, m_scanEndYSpinBox, line);
+                simulationParameterChanged();
+            };
+        connect(m_simulationKindCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, updateSimulationModeUi);
+        connect(m_scanPassCountSpinBox, QOverload<int>::of(&QSpinBox::valueChanged),
+            this, simulationParameterChanged);
+        for(QDoubleSpinBox* spin : { m_plateSideSpinBox, m_plateCellSpinBox,
+            m_simulationDistanceSpinBox, m_trajectoryOverrunSpinBox,
+            m_simulationIncidenceSpinBox,
+            m_simulationAzimuthSpinBox, m_simulationToolRollSpinBox,
+            m_pointDurationSpinBox, m_scanSpeedSpinBox,
+            m_entrySpeedSpinBox, m_exitSpeedSpinBox, m_trajectoryPointIntervalSpinBox,
+            m_scanStartXSpinBox,
+            m_scanStartYSpinBox, m_scanEndXSpinBox, m_scanEndYSpinBox }) {
+            connect(spin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+                this, simulationParameterChanged);
+        }
+        connect(m_runSimulationButton, &QPushButton::clicked,
+            this, &CoatingAnalysisPanel::simulationPredictionRequested);
+        connect(m_exportSimulationButton, &QPushButton::clicked,
+            this, &CoatingAnalysisPanel::simulationExportRequested);
+        m_runSimulationButton->setEnabled(false);
+        m_exportSimulationButton->setEnabled(false);
+        m_simulationKindCombo->setCurrentIndex(0);
+        updateSimulationModeUi(m_simulationKindCombo->currentIndex());
+
+        m_modeTabBar = new QTabBar(this);
+        m_modeTabBar->setMinimumWidth(0);
+        m_modeTabBar->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+        m_modeTabBar->setExpanding(false);
+        m_modeTabBar->setUsesScrollButtons(true);
+        m_modeTabBar->setElideMode(Qt::ElideRight);
+        m_modeTabBar->addTab(QStringLiteral("Thickness Prediction"));
+        m_modeTabBar->addTab(QStringLiteral("Thickness Simulation"));
+        rootLayout->insertWidget(0, m_modeTabBar);
 
         // Workpiece selection.
         auto* workpieceGroup = new QGroupBox(QStringLiteral("Workpiece"), this);
@@ -38,8 +200,10 @@ namespace robot_qt_viewer
             QComboBox::AdjustToMinimumContentsLengthWithIcon);
         m_workpieceCombo->setMinimumContentsLength(14);
         m_workpieceCombo->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        m_workpieceCombo->setMinimumContentsLength(0);
         workpieceForm->addRow(QStringLiteral("Target"), m_workpieceCombo);
         rootLayout->addWidget(workpieceGroup);
+        m_predictionSections.push_back(workpieceGroup);
         connect(m_workpieceCombo,
             QOverload<int>::of(&QComboBox::currentIndexChanged),
             this,
@@ -69,11 +233,17 @@ namespace robot_qt_viewer
         m_openTrajectoryButton->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
         m_selectModelButton->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
         m_selectTrajectoryButton->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        for(QPushButton* button : { m_openModelButton, m_openTrajectoryButton,
+            m_selectModelButton, m_selectTrajectoryButton }) {
+            button->setMinimumWidth(0);
+            button->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+        }
         dataLayout->addWidget(m_openModelButton, 0, 0);
         dataLayout->addWidget(m_openTrajectoryButton, 0, 1);
         dataLayout->addWidget(m_selectModelButton, 1, 0);
         dataLayout->addWidget(m_selectTrajectoryButton, 1, 1);
         rootLayout->addWidget(dataGroup);
+        m_predictionSections.push_back(dataGroup);
         connect(m_openModelButton, &QPushButton::clicked,
             this, &CoatingAnalysisPanel::openModelRequested);
         connect(m_openTrajectoryButton, &QPushButton::clicked,
@@ -97,6 +267,7 @@ namespace robot_qt_viewer
         algorithmLayout->addWidget(m_algorithmCombo);
         algorithmLayout->addWidget(m_curveWidget);
         rootLayout->addWidget(algorithmGroup);
+        m_predictionSections.push_back(algorithmGroup);
         connect(m_algorithmCombo,
             QOverload<int>::of(&QComboBox::currentIndexChanged),
             this,
@@ -125,6 +296,7 @@ namespace robot_qt_viewer
         samplingForm->addRow(QStringLiteral("Sampling"), m_trajectorySamplingCombo);
         samplingForm->addRow(QStringLiteral("Time step"), m_timeStepSpinBox);
         rootLayout->addWidget(samplingGroup);
+        m_predictionSections.push_back(samplingGroup);
         connect(m_trajectorySamplingCombo,
             QOverload<int>::of(&QComboBox::currentIndexChanged),
             this,
@@ -146,6 +318,7 @@ namespace robot_qt_viewer
         optionsLayout->addWidget(m_bvhCheckBox);
         optionsLayout->addWidget(m_historyCheckBox);
         rootLayout->addWidget(optionsGroup);
+        m_predictionSections.push_back(optionsGroup);
 
         auto* modeGroup = new QGroupBox(QStringLiteral("Prediction Input"), this);
         auto* modeLayout = new QVBoxLayout(modeGroup);
@@ -154,8 +327,8 @@ namespace robot_qt_viewer
         m_predictionModeCombo = new QComboBox(modeGroup);
         m_predictionModeCombo->setSizeAdjustPolicy(
             QComboBox::AdjustToMinimumContentsLengthWithIcon);
-        m_predictionModeCombo->setMinimumContentsLength(20);
-        m_predictionModeCombo->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        m_predictionModeCombo->setMinimumContentsLength(0);
+        m_predictionModeCombo->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
         const auto addPredictionMode = [this](
                                            const QString& label,
                                            const QString& tooltip,
@@ -233,6 +406,7 @@ namespace robot_qt_viewer
         adaptiveForm->addRow(QStringLiteral("Outside target vertex ratio"), m_adaptiveMeshSimplificationSpinBox);
         modeLayout->addWidget(m_adaptiveMeshOptionsWidget);
         rootLayout->addWidget(modeGroup);
+        m_predictionSections.push_back(modeGroup);
 
         m_localConfigGroup = new QGroupBox(QStringLiteral("Local Setup"), this);
         auto* periodicLayout = new QVBoxLayout(m_localConfigGroup);
@@ -305,6 +479,7 @@ namespace robot_qt_viewer
         debugLayout->addWidget(m_showLocalSprayPointsCheckBox);
         periodicLayout->addWidget(debugGroup);
         rootLayout->addWidget(m_localConfigGroup);
+        m_predictionSections.push_back(m_localConfigGroup);
 
         const auto updateModeControls = [this]() {
             const bool localMode = periodicLocalPredictionEnabled();
@@ -330,8 +505,8 @@ namespace robot_qt_viewer
             m_showRotationAxisCheckBox->setEnabled(rotationBasedMode);
             m_showLocalSectorCheckBox->setEnabled(rotationBasedMode);
             m_showLocalSprayPointsCheckBox->setEnabled(rotationBasedMode);
-            m_showLocalSectorCheckBox->setText(profileMode
-                ? QStringLiteral("Profile line") : QStringLiteral("Local sector"));
+            m_showLocalSectorCheckBox->setText(coatingAnalysisTranslate(m_languageCode,
+                profileMode ? QStringLiteral("Profile line") : QStringLiteral("Local sector")));
             m_spatialGridOptionsWidget->setVisible(spatialMode);
             m_adaptiveMeshOptionsWidget->setVisible(adaptiveMode || localCandidateMode);
             m_selectAdaptiveRegionButton->setEnabled(adaptiveMode || localCandidateMode);
@@ -415,6 +590,7 @@ namespace robot_qt_viewer
         runLayout->addWidget(m_progressBar);
         runLayout->addWidget(m_statusLabel);
         rootLayout->addWidget(runGroup);
+        m_predictionSections.push_back(runGroup);
         rootLayout->addStretch(1);
 
         connect(m_predictionButton, &QPushButton::clicked,
@@ -444,6 +620,7 @@ namespace robot_qt_viewer
         validationLayout->addWidget(m_checkReferenceButton);
         validationLayout->addWidget(m_referenceStatusLabel);
         rootLayout->insertWidget(rootLayout->count() - 1, m_validationGroup);
+        m_predictionSections.push_back(m_validationGroup);
 
         connect(m_setReferenceButton, &QPushButton::clicked,
             this, &CoatingAnalysisPanel::setReferenceRequested);
@@ -452,11 +629,114 @@ namespace robot_qt_viewer
         connect(m_checkReferenceButton, &QPushButton::clicked,
             this, &CoatingAnalysisPanel::checkReferenceRequested);
 
+        connect(m_modeTabBar, &QTabBar::currentChanged,
+            this, &CoatingAnalysisPanel::setModeTab);
+        for(QWidget* section : m_predictionSections) {
+            section->setMinimumSize(0, 0);
+            section->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+        }
+        for(QFormLayout* form : findChildren<QFormLayout*>()) {
+            form->setRowWrapPolicy(QFormLayout::WrapLongRows);
+            form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+        }
+        setModeTab(0);
+
         refreshDepositionCurve();
+        setLanguageCode(QStringLiteral("en"));
+    }
+
+    void CoatingAnalysisPanel::setLanguageCode(const QString& languageCode)
+    {
+        m_languageCode = languageCode.toLower().startsWith(QStringLiteral("zh"))
+            ? QStringLiteral("zh-CN") : QStringLiteral("en");
+        const auto translate = [this](const QString& value) {
+            return coatingAnalysisTranslate(m_languageCode, value);
+        };
+        for(QWidget* widget : findChildren<QWidget*>()) {
+            if(auto* group = qobject_cast<QGroupBox*>(widget)) {
+                group->setTitle(translate(group->title()));
+            } else if(auto* button = qobject_cast<QAbstractButton*>(widget)) {
+                button->setText(translate(button->text()));
+                button->setToolTip(translate(button->toolTip()));
+            } else if(auto* label = qobject_cast<QLabel*>(widget)) {
+                label->setText(translate(label->text()));
+                label->setToolTip(translate(label->toolTip()));
+            } else if(auto* combo = qobject_cast<QComboBox*>(widget)) {
+                for(int index = 0; index < combo->count(); ++index) {
+                    combo->setItemText(index, translate(combo->itemText(index)));
+                    combo->setItemData(index,
+                        translate(combo->itemData(index, Qt::ToolTipRole).toString()),
+                        Qt::ToolTipRole);
+                }
+                combo->setToolTip(translate(combo->toolTip()));
+            } else if(auto* tabBar = qobject_cast<QTabBar*>(widget)) {
+                for(int index = 0; index < tabBar->count(); ++index) {
+                    tabBar->setTabText(index, translate(tabBar->tabText(index)));
+                    tabBar->setTabToolTip(index, translate(tabBar->tabToolTip(index)));
+                }
+            }
+        }
+        if(m_statusLabel != nullptr) {
+            m_statusLabel->setText(translate(m_statusLabel->text()));
+        }
+        if(m_referenceStatusLabel != nullptr) {
+            m_referenceStatusLabel->setText(translate(m_referenceStatusLabel->text()));
+        }
+        if(m_rotationAxisStatusLabel != nullptr) {
+            m_rotationAxisStatusLabel->setText(translate(m_rotationAxisStatusLabel->text()));
+        }
+        if(m_predictionModeCombo != nullptr) {
+            m_predictionModeCombo->setToolTip(translate(
+                m_predictionModeCombo->toolTip()));
+        }
+    }
+
+    void CoatingAnalysisPanel::setModeTab(int index)
+    {
+        const bool simulation = index == 1;
+        m_simulationGroup->setVisible(simulation);
+        for(QWidget* section : m_predictionSections) {
+            if(section != nullptr) {
+                section->setVisible(!simulation);
+            }
+        }
+        if(simulation != m_simulationActive) {
+            if(simulation) {
+                emit enterSimulationRequested();
+            } else {
+                emit exitSimulationRequested();
+            }
+        }
     }
 
     void CoatingAnalysisPanel::applyViewModel(const CoatingAnalysisViewModel& viewModel)
     {
+        m_simulationActive = viewModel.simulationActive;
+        if(m_modeTabBar != nullptr) {
+            const QSignalBlocker tabBlocker(m_modeTabBar);
+            m_modeTabBar->setCurrentIndex(m_simulationActive ? 1 : 0);
+            m_simulationGroup->setVisible(m_simulationActive);
+            for(QWidget* section : m_predictionSections) {
+                if(section != nullptr) {
+                    section->setVisible(!m_simulationActive);
+                }
+            }
+        }
+        const bool simulationLocked = viewModel.predictionRunning || viewModel.simulationRunning;
+        m_runSimulationButton->setEnabled(viewModel.canRunSimulation && !simulationLocked);
+        m_exportSimulationButton->setEnabled(viewModel.canExportSimulation && !simulationLocked);
+        for(QDoubleSpinBox* spin : { m_plateSideSpinBox, m_plateCellSpinBox,
+            m_simulationDistanceSpinBox, m_trajectoryOverrunSpinBox,
+            m_simulationIncidenceSpinBox,
+            m_simulationAzimuthSpinBox, m_simulationToolRollSpinBox,
+            m_pointDurationSpinBox, m_scanSpeedSpinBox,
+            m_entrySpeedSpinBox, m_exitSpeedSpinBox, m_trajectoryPointIntervalSpinBox,
+            m_scanStartXSpinBox,
+            m_scanStartYSpinBox, m_scanEndXSpinBox, m_scanEndYSpinBox }) {
+            spin->setEnabled(m_simulationActive && !simulationLocked);
+        }
+        m_scanPassCountSpinBox->setEnabled(m_simulationActive && !simulationLocked);
+        m_simulationKindCombo->setEnabled(m_simulationActive && !simulationLocked);
         {
             const QSignalBlocker blocker(m_workpieceCombo);
             bool itemsChanged = m_workpieceCombo->count() != viewModel.workpieces.size();
@@ -480,18 +760,20 @@ namespace robot_qt_viewer
         }
         m_workpieceCombo->setEnabled(
             !viewModel.workpieces.isEmpty() && !viewModel.predictionRunning);
-        m_openModelButton->setEnabled(!viewModel.predictionRunning);
-        m_openTrajectoryButton->setEnabled(!viewModel.predictionRunning);
-        m_selectModelButton->setEnabled(!viewModel.predictionRunning);
-        m_selectTrajectoryButton->setEnabled(!viewModel.predictionRunning);
-        m_trajectorySamplingCombo->setEnabled(!viewModel.predictionRunning);
+        const bool standardControlsEnabled = !viewModel.predictionRunning
+            && !viewModel.simulationActive;
+        m_openModelButton->setEnabled(standardControlsEnabled);
+        m_openTrajectoryButton->setEnabled(standardControlsEnabled);
+        m_selectModelButton->setEnabled(standardControlsEnabled);
+        m_selectTrajectoryButton->setEnabled(standardControlsEnabled);
+        m_trajectorySamplingCombo->setEnabled(standardControlsEnabled);
         m_timeStepSpinBox->setEnabled(
-            !viewModel.predictionRunning
+            standardControlsEnabled
             && trajectorySamplingMode()
                 == spraythickness::TrajectorySamplingMode::ResampleByTimeStep);
-        m_algorithmCombo->setEnabled(!viewModel.predictionRunning);
-        m_bvhCheckBox->setEnabled(!viewModel.predictionRunning);
-        m_historyCheckBox->setEnabled(!viewModel.predictionRunning);
+        m_algorithmCombo->setEnabled(standardControlsEnabled);
+        m_bvhCheckBox->setEnabled(standardControlsEnabled);
+        m_historyCheckBox->setEnabled(standardControlsEnabled);
         m_predictionModeCombo->setEnabled(
             viewModel.hasModel && viewModel.hasTrajectory
             && !viewModel.predictionRunning);
@@ -513,8 +795,8 @@ namespace robot_qt_viewer
         m_localConfigGroup->setVisible(
             viewModel.localMode || viewModel.axisymmetricProfileMode
             || viewModel.adaptiveMeshMode || viewModel.localCandidateVertexMode);
-        m_rotationAxisStatusLabel->setText(
-            QStringLiteral("Rotation axis: %1").arg(viewModel.rotationAxisSource));
+        m_rotationAxisStatusLabel->setText(coatingAnalysisTranslate(m_languageCode,
+            QStringLiteral("Rotation axis: %1").arg(viewModel.rotationAxisSource)));
         m_pickRotationSurfaceButton->setEnabled(
             viewModel.hasModel && (viewModel.localMode
                 || viewModel.axisymmetricProfileMode
@@ -532,10 +814,10 @@ namespace robot_qt_viewer
             (viewModel.adaptiveMeshMode || viewModel.localCandidateVertexMode)
             && viewModel.hasEffectiveRotationAxis
             && !viewModel.predictionRunning);
-        m_previewLocalInputsButton->setText(
+        m_previewLocalInputsButton->setText(coatingAnalysisTranslate(m_languageCode,
             viewModel.hasLocalPreview
                 ? QStringLiteral("Refresh local input preview")
-                : QStringLiteral("Preview local prediction inputs"));
+                : QStringLiteral("Preview local prediction inputs")));
         const bool periodicControlsEnabled = !viewModel.predictionRunning
             && (viewModel.localMode || viewModel.axisymmetricProfileMode
                 || viewModel.adaptiveMeshMode || viewModel.localCandidateVertexMode);
@@ -573,7 +855,7 @@ namespace robot_qt_viewer
         m_cancelButton->setVisible(viewModel.predictionRunning);
         m_progressBar->setVisible(viewModel.predictionRunning);
         m_progressBar->setValue(static_cast<int>(viewModel.progress * 1000.0));
-        m_statusLabel->setText(viewModel.status);
+        m_statusLabel->setText(coatingAnalysisTranslate(m_languageCode, viewModel.status));
         m_validationGroup->setVisible(viewModel.hasModel && viewModel.hasTrajectory);
         m_setReferenceButton->setVisible(true);
         m_clearReferenceButton->setVisible(true);
@@ -584,7 +866,9 @@ namespace robot_qt_viewer
             viewModel.canClearReference && !viewModel.predictionRunning);
         m_checkReferenceButton->setEnabled(
             viewModel.canCheckReference && !viewModel.predictionRunning);
-        m_referenceStatusLabel->setText(viewModel.referenceStatus);
+        m_referenceStatusLabel->setText(
+            coatingAnalysisTranslate(m_languageCode, viewModel.referenceStatus));
+        setModeTab(viewModel.simulationActive ? 1 : 0);
     }
 
     spraythickness::ThicknessModelKind CoatingAnalysisPanel::thicknessModel() const
@@ -686,6 +970,36 @@ namespace robot_qt_viewer
     double CoatingAnalysisPanel::spatialGridCellSizeMillimeters() const
     {
         return m_spatialGridCellSizeSpinBox->value();
+    }
+
+    SimulationExperimentParameters CoatingAnalysisPanel::simulationParameters() const
+    {
+        SimulationExperimentParameters parameters;
+        parameters.kind = static_cast<SimulationExperimentKind>(
+            m_simulationKindCombo->currentData().toInt());
+        parameters.plateSideMillimeters = m_plateSideSpinBox->value();
+        parameters.cellSizeMillimeters = m_plateCellSpinBox->value();
+        parameters.sprayDistanceMillimeters = m_simulationDistanceSpinBox->value();
+        parameters.trajectoryOverrunMillimeters = m_trajectoryOverrunSpinBox->value();
+        parameters.incidenceAngleDegrees = m_simulationIncidenceSpinBox->value();
+        parameters.azimuthDegrees = m_simulationAzimuthSpinBox->value();
+        parameters.toolRollDegrees = m_simulationToolRollSpinBox->value();
+        parameters.pointDurationSeconds = m_pointDurationSpinBox->value();
+        parameters.scanSpeedMillimetersPerSecond = m_scanSpeedSpinBox->value();
+        parameters.scanPassCount = m_scanPassCountSpinBox->value();
+        parameters.entrySpeedMillimetersPerSecond = m_entrySpeedSpinBox->value();
+        parameters.exitSpeedMillimetersPerSecond = m_exitSpeedSpinBox->value();
+        parameters.trajectoryPointIntervalSeconds = m_trajectoryPointIntervalSpinBox->value();
+        parameters.scanStartXMillimeters = m_scanStartXSpinBox->value();
+        parameters.scanStartYMillimeters = m_scanStartYSpinBox->value();
+        parameters.scanEndXMillimeters = m_scanEndXSpinBox->value();
+        parameters.scanEndYMillimeters = m_scanEndYSpinBox->value();
+        return parameters;
+    }
+
+    bool CoatingAnalysisPanel::simulationActive() const
+    {
+        return m_simulationActive;
     }
 
     void CoatingAnalysisPanel::setPeriodicLocalPredictionEnabled(bool enabled)

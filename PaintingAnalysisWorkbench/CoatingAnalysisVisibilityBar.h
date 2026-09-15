@@ -18,6 +18,7 @@ namespace robot_qt_viewer
     public:
         explicit CoatingAnalysisVisibilityBar(QWidget* parent = nullptr);
         void applyVisibility(const CoatingAnalysisVisibilityView& view);
+        void setLanguageCode(const QString& languageCode);
 
     signals:
         void showModelChanged(bool enabled);
@@ -30,5 +31,6 @@ namespace robot_qt_viewer
         QCheckBox* m_showSprayPoints = nullptr;
         QCheckBox* m_showThickness = nullptr;
         QCheckBox* m_thicknessPick = nullptr;
+        QString m_languageCode{ QStringLiteral("en") };
     };
 }

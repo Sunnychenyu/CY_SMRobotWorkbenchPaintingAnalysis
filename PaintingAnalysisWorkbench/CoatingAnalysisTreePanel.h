@@ -26,6 +26,7 @@ namespace robot_qt_viewer
 
     public:
         explicit CoatingAnalysisTreePanel(QWidget* parent = nullptr);
+        void setLanguageCode(const QString& languageCode);
 
         void applyTreeView(const CoatingAnalysisTreeView& view);
         // Not owned: forwards to the model so the waypoint branch can be
@@ -45,5 +46,6 @@ namespace robot_qt_viewer
 
         CoatingAnalysisTreeModel* m_model = nullptr;
         QTreeView* m_treeView = nullptr;
+        QString m_languageCode{ QStringLiteral("en") };
     };
 }

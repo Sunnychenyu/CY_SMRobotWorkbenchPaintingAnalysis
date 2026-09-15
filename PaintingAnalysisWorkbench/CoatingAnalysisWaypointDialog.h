@@ -14,6 +14,7 @@ namespace robot_qt_viewer
 
     public:
         explicit CoatingAnalysisWaypointDialog(QWidget* parent = nullptr);
+        void setLanguageCode(const QString& languageCode);
 
         void setWaypoint(
             const spraytrajectory::SprayPathPoint& point,
@@ -22,5 +23,6 @@ namespace robot_qt_viewer
 
     private:
         QLabel* m_textLabel = nullptr;
+        QString m_languageCode{ QStringLiteral("en") };
     };
 }
