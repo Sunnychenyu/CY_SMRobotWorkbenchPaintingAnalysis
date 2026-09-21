@@ -4,6 +4,8 @@ set(TARGET_NAME PaintingAnalysisWorkbench)
 set(CMAKE_AUTOMOC ON)
 
 set(SOURCES
+    AlgorithmReproductionJobController.cpp
+    AlgorithmReproductionJobController.h
     CoatingAnalysisLanguage.cpp
     CoatingAnalysisLanguage.h
     CoatingAnalysisInfoPanel.cpp
@@ -32,8 +34,14 @@ set(SOURCES
     PaintingAnalysisDialogService.h
     PaintingAnalysisMeshAdapter.cpp
     PaintingAnalysisMeshAdapter.h
+    PublishedReproductionAdapter.cpp
+    PublishedReproductionAdapter.h
+    PublishedReproductionDisplayAdapter.cpp
+    PublishedReproductionDisplayAdapter.h
     ThicknessPredictionJobController.cpp
     ThicknessPredictionJobController.h
+    ThicknessUniformityAnalysis.cpp
+    ThicknessUniformityAnalysis.h
     ThicknessLegendWidget.cpp
     ThicknessLegendWidget.h
 )
@@ -61,6 +69,7 @@ target_link_libraries(${TARGET_NAME}
         Common::GLRuntime
         SMRobotPlatform::SimulationProject
         SMRobotSpray::SprayThicknessPredictionOpenGL
+        nlohmann_json::nlohmann_json
 )
 
 target_compile_features(${TARGET_NAME} PUBLIC cxx_std_17)
@@ -79,6 +88,9 @@ if(BuildTests)
     add_subdirectory(
         regression/PaintingAnalysisMeshAdapterTest
         ${PROJECT_BINARY_DIR}/tests/painting_analysis_mesh_adapter)
+    add_subdirectory(
+        regression/ThicknessUniformityAnalysisTest
+        ${PROJECT_BINARY_DIR}/tests/thickness_uniformity_analysis)
 endif()
 
 if(ExportPacakge${PACKAGE_NAME})

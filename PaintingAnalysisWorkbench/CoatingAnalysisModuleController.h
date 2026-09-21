@@ -16,6 +16,8 @@
 #include <memory>
 #include <vector>
 
+class QMenu;
+
 namespace spraytrajectory
 {
     struct SprayPathPoint;
@@ -29,6 +31,7 @@ namespace robot_qt_viewer
     class CoatingAnalysisVisibilityBar;
     class RobotQtViewerDocumentContext;
     class ThicknessPredictionJobController;
+    class AlgorithmReproductionJobController;
     struct RobotQtViewerEvent;
 
     class CoatingAnalysisModuleController : public QObject
@@ -48,6 +51,7 @@ namespace robot_qt_viewer
         void activate();
         void deactivate();
         void setLanguageCode(const QString& languageCode);
+        void populateViewportContextMenu(QMenu* menu);
         void handleEvent(const RobotQtViewerEvent& event);
         void handleSurfaceScalarHover(
             const QString& objectId,
@@ -72,6 +76,12 @@ namespace robot_qt_viewer
         const spraytrajectory::SprayPathPoint& waypointAt(std::size_t index) const;
         double waypointDurationAt(std::size_t index) const;
 
+    public slots:
+        void setThicknessDisplayRange(
+            double minimumMicrometers,
+            double maximumMicrometers);
+        void resetThicknessDisplayRange();
+
     signals:
         void statusMessageRequested(const QString& message, int timeoutMs);
         void thicknessToolTipRequested(
@@ -82,7 +92,8 @@ namespace robot_qt_viewer
             bool visible,
             double minimumMicrometers,
             double maximumMicrometers,
-            bool relativeError);
+            bool relativeError,
+            bool editingEnabled);
 
     private:
         struct AxisymmetricProfileState;
@@ -103,6 +114,7 @@ namespace robot_qt_viewer
         void handlePredictionFinished(const spraythickness::ThicknessPredictionResult& prediction);
         void handlePredictionFailed(const QString& message);
         void setShowModel(bool enabled);
+        void setShowTrajectory(bool enabled);
         void setShowSprayPoints(bool enabled);
         void setShowThickness(bool enabled);
         void setThicknessPickEnabled(bool enabled);
@@ -122,6 +134,8 @@ namespace robot_qt_viewer
         void submitTrajectoryPreview();
         void updateTrajectoryPreviewVisibility();
         void applyOverlayAfterReload();
+        bool applyCurrentSurfaceOverlay(QString* errorMessage);
+        void updateThicknessRangeAndStatistics();
         void refreshViewModel();
         void publishStateChanged();
         bool ensurePreviewWorkpieceLoaded();
@@ -140,6 +154,19 @@ namespace robot_qt_viewer
         void rebuildSimulation(bool runAfterBuild = false, bool focusView = false);
         void runSimulationPrediction();
         void exportSimulationResult();
+        void enterReproduction();
+        void exitReproduction();
+        void runAlgorithmReproduction();
+        void createReproductionTemplate();
+        void cancelAlgorithmReproduction();
+        void exportAlgorithmReproduction();
+        void handleReproductionProgress(double progress, const QString& message);
+        void handleReproductionFinished(
+            const spraythickness::AlgorithmReproductionResult& result);
+        void handleReproductionFailed(const QString& message);
+        bool simulationActive() const;
+        bool reproductionActive() const;
+        bool anyPredictionRunning() const;
 
         void handleWaypointInfoRequested(int index);
         void handleModelVisibilityToggleRequested(const QString& objectId);
@@ -153,6 +180,7 @@ namespace robot_qt_viewer
         RobotQtViewerDocumentContext& m_context;
         CoatingAnalysisSession m_session;
         std::unique_ptr<ThicknessPredictionJobController> m_predictionJob;
+        std::unique_ptr<AlgorithmReproductionJobController> m_reproductionJob;
         QString m_status = QStringLiteral("Load a model and trajectory to begin.");
         QString m_predictionObjectId;
         double m_predictionProgress = 0.0;
@@ -180,7 +208,10 @@ namespace robot_qt_viewer
         QString m_validationDetails = QStringLiteral("No reference result.");
         std::vector<QString> m_modelVisibilityOverrideIds;
         QHash<QString, bool> m_modelVisibility;
-        bool m_simulationActive = false;
+        CoatingAnalysisMode m_mode{ CoatingAnalysisMode::Prediction };
+        bool m_reproductionGpuRun = false;
+        QString m_reproductionStatus = QStringLiteral("No reproduction result yet.");
+        sprayworkpiece::WorkpieceModel m_reproductionWorkpiece;
         SimulationExperimentData m_simulation;
         bool m_simulationReady = false;
         QString m_simulationReadyStatus;

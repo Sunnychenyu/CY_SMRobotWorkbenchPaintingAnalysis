@@ -45,6 +45,7 @@ namespace robot_qt_viewer
         QString axisymmetricProfileDetails;
         QString rotationAxisSource = QStringLiteral("Not configured");
         bool showModel = true;
+        bool showTrajectory = true;
         bool showSprayPoints = true;
         bool showThickness = false;
         bool thicknessPickEnabled = false;
@@ -64,11 +65,16 @@ namespace robot_qt_viewer
         bool canClearReference = false;
         bool canCheckReference = false;
         QString referenceStatus = QStringLiteral("Reference: not set");
+        CoatingAnalysisMode mode{ CoatingAnalysisMode::Prediction };
         bool simulationActive = false;
         bool simulationRunning = false;
         bool canRunSimulation = false;
         bool canExportSimulation = false;
         QString simulationDetails;
+        bool reproductionRunning = false;
+        bool canRunReproduction = false;
+        bool canExportReproduction = false;
+        QString reproductionDetails;
     };
 
     struct CoatingAnalysisInfoView
@@ -84,6 +90,10 @@ namespace robot_qt_viewer
         double predictionElapsedSeconds = 0.0;
         spraythickness::ThicknessMetrics thicknessMetrics;
         spraythickness::ThicknessPredictionTiming predictionTiming;
+        bool manualThicknessRange = false;
+        double minimumDisplayThicknessMicrometers = 0.0;
+        double maximumDisplayThicknessMicrometers = 0.0;
+        ThicknessUniformityStatistics uniformityStatistics;
         QString validationDetails = QStringLiteral("No reference result.");
         bool simulationActive = false;
         QString simulationDetails;
@@ -96,6 +106,7 @@ namespace robot_qt_viewer
         bool hasTrajectory = false;
         bool hasThickness = false;
         bool showModel = true;
+        bool showTrajectory = true;
         bool showSprayPoints = true;
         bool showThickness = false;
         bool thicknessPickEnabled = false;

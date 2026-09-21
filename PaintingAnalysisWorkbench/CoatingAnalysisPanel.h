@@ -2,8 +2,10 @@
 
 #include "CoatingAnalysisViewModel.h"
 
+#include <SprayThicknessPrediction/AlgorithmReproduction.h>
 #include <SprayThicknessPrediction/ThicknessPrediction.h>
 
+#include <QHash>
 #include <QWidget>
 #include <QVector>
 
@@ -16,6 +18,7 @@ class QComboBox;
 class QDoubleSpinBox;
 class QGroupBox;
 class QLabel;
+class QLineEdit;
 class QProgressBar;
 class QPushButton;
 class QSpinBox;
@@ -24,6 +27,7 @@ class QTabBar;
 namespace robot_qt_viewer
 {
     class DepositionCurveWidget;
+    struct PublishedReproductionRuntimeInputs;
 
     enum class PredictionInputMode
     {
@@ -51,6 +55,8 @@ namespace robot_qt_viewer
         void setLanguageCode(const QString& languageCode);
 
         spraythickness::ThicknessModelKind thicknessModel() const;
+        Eigen::Vector3d sprayDirectionLocal() const;
+        Eigen::Vector3d powderFeedDirectionLocal() const;
         spraythickness::TrajectorySamplingMode trajectorySamplingMode() const;
         double timeStepSeconds() const;
         bool bvhOcclusionEnabled() const;
@@ -73,6 +79,11 @@ namespace robot_qt_viewer
         QString selectedWorkpieceId() const;
         SimulationExperimentParameters simulationParameters() const;
         bool simulationActive() const;
+        CoatingAnalysisMode mode() const;
+        spraythickness::ReproductionAlgorithmKind reproductionAlgorithm() const;
+        PublishedReproductionRuntimeInputs reproductionRuntimeInputs() const;
+        QString reproductionConfigurationPath() const;
+        void setReproductionConfigurationPath(const QString& path);
 
     signals:
         void openModelRequested();
@@ -89,6 +100,7 @@ namespace robot_qt_viewer
         void rotationAxisChanged();
         void axisymmetricProfileSampleCountChanged();
         void spatialGridParametersChanged();
+        void depositionDirectionsChanged();
         void profileRegionSelectionRequested();
         void adaptiveRegionSelectionRequested();
         void localDebugVisibilityChanged(
@@ -103,20 +115,34 @@ namespace robot_qt_viewer
         void simulationParametersChanged();
         void simulationPredictionRequested();
         void simulationExportRequested();
+        void enterReproductionRequested();
+        void exitReproductionRequested();
+        void reproductionRequested();
+        void reproductionInputsChanged();
+        void reproductionTemplateRequested();
+        void cancelReproductionRequested();
+        void reproductionExportRequested();
 
     private:
         void refreshDepositionCurve();
+        void ensurePowderFeedDirectionValid();
+        void updateTrajectorySamplingUi();
         void emitLocalDebugVisibilityChanged();
         void setModeTab(int index);
+        void updateReproductionInputUi();
+        bool reproductionForcesOriginalTrajectoryPoints() const;
 
         QComboBox* m_workpieceCombo = nullptr;
         QComboBox* m_algorithmCombo = nullptr;
+        QComboBox* m_sprayDirectionCombo = nullptr;
+        QComboBox* m_powderFeedDirectionCombo = nullptr;
         DepositionCurveWidget* m_curveWidget = nullptr;
         QPushButton* m_openModelButton = nullptr;
         QPushButton* m_openTrajectoryButton = nullptr;
         QPushButton* m_selectModelButton = nullptr;
         QPushButton* m_selectTrajectoryButton = nullptr;
         QComboBox* m_trajectorySamplingCombo = nullptr;
+        QWidget* m_timeStepLabel = nullptr;
         QDoubleSpinBox* m_timeStepSpinBox = nullptr;
         QCheckBox* m_bvhCheckBox = nullptr;
         QCheckBox* m_historyCheckBox = nullptr;
@@ -171,8 +197,33 @@ namespace robot_qt_viewer
         QDoubleSpinBox* m_scanEndYSpinBox = nullptr;
         QPushButton* m_runSimulationButton = nullptr;
         QPushButton* m_exportSimulationButton = nullptr;
-        bool m_simulationActive = false;
+        QGroupBox* m_reproductionGroup = nullptr;
+        QComboBox* m_reproductionAlgorithmCombo = nullptr;
+        QLineEdit* m_reproductionConfigurationEdit = nullptr;
+        QPushButton* m_selectReproductionConfigurationButton = nullptr;
+        QPushButton* m_createReproductionTemplateButton = nullptr;
+        QLabel* m_reproductionModelInputLabel = nullptr;
+        QLabel* m_reproductionTrajectoryInputLabel = nullptr;
+        QWidget* m_tzinavaRotationLabel = nullptr;
+        QWidget* m_tzinavaRotationWidget = nullptr;
+        QDoubleSpinBox* m_tzinavaRotationOriginXSpinBox = nullptr;
+        QDoubleSpinBox* m_tzinavaRotationOriginYSpinBox = nullptr;
+        QDoubleSpinBox* m_tzinavaRotationOriginZSpinBox = nullptr;
+        QDoubleSpinBox* m_tzinavaRotationAxisXSpinBox = nullptr;
+        QDoubleSpinBox* m_tzinavaRotationAxisYSpinBox = nullptr;
+        QDoubleSpinBox* m_tzinavaRotationAxisZSpinBox = nullptr;
+        QDoubleSpinBox* m_tzinavaAngularSpeedSpinBox = nullptr;
+        QPushButton* m_runReproductionButton = nullptr;
+        QPushButton* m_cancelReproductionButton = nullptr;
+        QPushButton* m_exportReproductionButton = nullptr;
+        QProgressBar* m_reproductionProgressBar = nullptr;
+        QLabel* m_reproductionStatusLabel = nullptr;
+        QHash<int, QString> m_reproductionConfigurationPaths;
+        int m_reproductionConfigurationAlgorithm = -1;
+        bool m_reproductionControlsLocked = false;
+        CoatingAnalysisMode m_mode{ CoatingAnalysisMode::Prediction };
         QTabBar* m_modeTabBar = nullptr;
+        QVector<QWidget*> m_sharedSections;
         QVector<QWidget*> m_predictionSections;
         QString m_languageCode{ QStringLiteral("en") };
     };

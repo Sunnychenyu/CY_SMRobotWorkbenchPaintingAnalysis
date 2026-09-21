@@ -1,7 +1,9 @@
 #pragma once
 
 #include "PaintingAnalysisMeshAdapter.h"
+#include "ThicknessUniformityAnalysis.h"
 
+#include <SprayThicknessPrediction/AlgorithmReproduction.h>
 #include <SprayThicknessPrediction/ThicknessPrediction.h>
 #include <SprayTrajectoryCore/SprayTrajectory.h>
 #include <VisualizationSDK/SurfaceScalarOverlay.h>
@@ -14,6 +16,13 @@
 
 namespace robot_qt_viewer
 {
+    enum class CoatingAnalysisMode
+    {
+        Prediction = 0,
+        Simulation = 1,
+        Reproduction = 2
+    };
+
     struct CoatingAnalysisModelInfo
     {
         std::size_t subMeshCount = 0;
@@ -54,33 +63,44 @@ namespace robot_qt_viewer
         PaintingAnalysisMeshBinding binding;
         std::shared_ptr<assetcore::ModelDesc> predictionDisplayModel;
         spraythickness::ThicknessPredictionResult prediction;
+        spraythickness::AlgorithmReproductionResult reproduction;
         smrobot::visualization::SurfaceScalarOverlay overlay;
         smrobot::visualization::SurfaceScalarOverlay thicknessOverlay;
         double predictionElapsedSeconds = 0.0;
         bool hasResult = false;
+        bool hasReproductionResult = false;
         bool showModel = true;
+        bool showTrajectory = true;
         bool showSprayPoints = true;
         bool showThickness = false;
         bool thicknessPickEnabled = false;
         bool showRelativeError = false;
+        bool manualThicknessRange = false;
+        double minimumDisplayThicknessMeters = 0.0;
+        double maximumDisplayThicknessMeters = 0.0;
+        ThicknessUniformityStatistics uniformityStatistics;
 
         void clearResult()
         {
             binding.sampleIndicesBySubMesh.clear();
             predictionDisplayModel.reset();
             prediction = spraythickness::ThicknessPredictionResult();
+            reproduction = spraythickness::AlgorithmReproductionResult();
             overlay = smrobot::visualization::SurfaceScalarOverlay();
             thicknessOverlay = smrobot::visualization::SurfaceScalarOverlay();
             predictionElapsedSeconds = 0.0;
             hasResult = false;
+            hasReproductionResult = false;
             showThickness = false;
             thicknessPickEnabled = false;
             showRelativeError = false;
+            uniformityStatistics = ThicknessUniformityStatistics();
         }
 
         void clear()
         {
             const bool preservedShowModel = showModel;
+            const bool preservedShowTrajectory = showTrajectory;
             const bool preservedShowSprayPoints = showSprayPoints;
             objectId.clear();
             modelName.clear();
@@ -92,7 +112,11 @@ namespace robot_qt_viewer
             trajectory = spraytrajectory::SprayTrajectory();
             waypoints.clear();
             clearResult();
+            manualThicknessRange = false;
+            minimumDisplayThicknessMeters = 0.0;
+            maximumDisplayThicknessMeters = 0.0;
             showModel = preservedShowModel;
+            showTrajectory = preservedShowTrajectory;
             showSprayPoints = preservedShowSprayPoints;
         }
     };

@@ -7,7 +7,10 @@
 #include "CoatingAnalysisWaypointDialog.h"
 #include "AxisymmetricProfileSelectionDialog.h"
 #include "PaintingAnalysisMeshAdapter.h"
+#include "PublishedReproductionAdapter.h"
+#include "PublishedReproductionDisplayAdapter.h"
 #include "ThicknessPredictionJobController.h"
+#include "AlgorithmReproductionJobController.h"
 #include "PaintingAnalysisDialogService.h"
 #include "SimulationExperiment.h"
 #include "CoatingAnalysisLanguage.h"
@@ -28,11 +31,14 @@
 #include <SimulationProject/AssetResolver.h>
 #include <SimulationProject/ProjectSession.h>
 #include <SimulationProject/RuntimePaths.h>
-#include <SprayTrajectoryCore/LegacySprayTrajectoryIo.h>
+#include <SprayTrajectoryCore/SprayTrajectoryIo.h>
 #include <QDir>
 #include <QFileDialog>
+#include <QFile>
 #include <QFileInfo>
+#include <QMenu>
 #include <QSettings>
+#include <QTextStream>
 
 #include <Eigen/Geometry>
 
@@ -41,6 +47,8 @@
 #include <filesystem>
 #include <limits>
 #include <numeric>
+#include <stdexcept>
+#include <type_traits>
 
 namespace
 {
@@ -52,6 +60,8 @@ namespace
         "K:/rs2026/data/ThickPredictData/PointData/libing_pointdata/MergedTrajectory_0_0.txt");
     constexpr const char* kSimulationExportDirectorySettingsKey =
         "PaintingAnalysis/SimulationExportDirectory";
+    constexpr const char* kReproductionExportDirectorySettingsKey =
+        "PaintingAnalysis/ReproductionExportDirectory";
 
     double elapsedMilliseconds(const std::chrono::steady_clock::time_point& start)
     {
@@ -442,6 +452,8 @@ namespace robot_qt_viewer
         , m_visibilityBar(visibilityBar)
         , m_context(context)
         , m_predictionJob(std::make_unique<ThicknessPredictionJobController>())
+        , m_reproductionJob(
+              std::make_unique<AlgorithmReproductionJobController>())
         , m_axisymmetricProfile(std::make_unique<AxisymmetricProfileState>())
     {
         connect(&m_panel, &CoatingAnalysisPanel::openModelRequested,
@@ -470,7 +482,7 @@ namespace robot_qt_viewer
             this, &CoatingAnalysisModuleController::selectAxisymmetricProfileRegion);
         connect(&m_panel, &CoatingAnalysisPanel::axisymmetricProfileSampleCountChanged,
             this, [this]() {
-                if(m_predictionJob->isRunning()
+                if(anyPredictionRunning()
                     || !m_panel.axisymmetricProfilePredictionEnabled()
                     || !m_axisymmetricProfile->selection.enabled) {
                     return;
@@ -481,7 +493,7 @@ namespace robot_qt_viewer
             this, &CoatingAnalysisModuleController::setLocalDebugVisibility);
         connect(&m_panel, &CoatingAnalysisPanel::localPreviewParametersChanged,
             this, [this]() {
-                if(m_predictionJob->isRunning()) {
+                if(anyPredictionRunning()) {
                     return;
                 }
                 if(m_session.hasResult) {
@@ -545,7 +557,7 @@ namespace robot_qt_viewer
             });
         connect(&m_panel, &CoatingAnalysisPanel::rotationAxisChanged,
             this, [this]() {
-                if(m_predictionJob->isRunning()) {
+                if(anyPredictionRunning()) {
                     return;
                 }
                 if(!m_panel.rotationBasedPredictionEnabled()
@@ -567,7 +579,7 @@ namespace robot_qt_viewer
             });
         connect(&m_panel, &CoatingAnalysisPanel::spatialGridParametersChanged,
             this, [this]() {
-                if(m_predictionJob->isRunning() || !m_session.hasResult) {
+                if(anyPredictionRunning() || !m_session.hasResult) {
                     return;
                 }
                 if(RobotQtViewerViewportServices* services = m_context.viewportServices()) {
@@ -578,6 +590,31 @@ namespace robot_qt_viewer
                 m_hasCurrentThickness = false;
                 m_status = QStringLiteral(
                     "Spatial grid settings changed. Run prediction to apply them.");
+                refreshViewModel();
+                publishStateChanged();
+            });
+        connect(&m_panel, &CoatingAnalysisPanel::depositionDirectionsChanged,
+            this, [this]() {
+                if(anyPredictionRunning()) {
+                    return;
+                }
+                if(m_session.hasResult) {
+                    if(RobotQtViewerViewportServices* services =
+                            m_context.viewportServices()) {
+                        services->setSurfaceScalarProbeEnabled(false, QString());
+                        services->clearSurfaceScalarOverlay(m_session.objectId);
+                        services->clearCoatingPredictionModel(m_session.objectId);
+                    }
+                    m_session.clearResult();
+                    m_hasCurrentThickness = false;
+                    emit thicknessToolTipRequested(QString(), QPoint(), false);
+                }
+                m_status = QStringLiteral(
+                    "Deposition directions changed. Run prediction to apply them.");
+                if(m_hasLocalPreview && m_panel.periodicLocalPredictionEnabled()) {
+                    previewLocalInputs();
+                    return;
+                }
                 refreshViewModel();
                 publishStateChanged();
             });
@@ -597,7 +634,7 @@ namespace robot_qt_viewer
             this, &CoatingAnalysisModuleController::exitSimulation);
         connect(&m_panel, &CoatingAnalysisPanel::simulationParametersChanged,
             this, [this]() {
-                if(m_simulationActive && !m_predictionJob->isRunning()) {
+                if(simulationActive() && !anyPredictionRunning()) {
                     rebuildSimulation(false);
                 }
             });
@@ -605,6 +642,36 @@ namespace robot_qt_viewer
             this, &CoatingAnalysisModuleController::runSimulationPrediction);
         connect(&m_panel, &CoatingAnalysisPanel::simulationExportRequested,
             this, &CoatingAnalysisModuleController::exportSimulationResult);
+        connect(&m_panel, &CoatingAnalysisPanel::enterReproductionRequested,
+            this, &CoatingAnalysisModuleController::enterReproduction);
+        connect(&m_panel, &CoatingAnalysisPanel::exitReproductionRequested,
+            this, &CoatingAnalysisModuleController::exitReproduction);
+        connect(&m_panel, &CoatingAnalysisPanel::reproductionRequested,
+            this, &CoatingAnalysisModuleController::runAlgorithmReproduction);
+        connect(&m_panel, &CoatingAnalysisPanel::reproductionInputsChanged,
+            this, [this]() {
+                if(!reproductionActive() || anyPredictionRunning()) {
+                    return;
+                }
+                if(m_session.hasReproductionResult) {
+                    if(RobotQtViewerViewportServices* services =
+                            m_context.viewportServices()) {
+                        services->setSurfaceScalarProbeEnabled(false, QString());
+                        services->clearSurfaceScalarOverlay(m_session.objectId);
+                    }
+                    m_session.clearResult();
+                }
+                m_reproductionStatus = QStringLiteral(
+                    "Reproduction inputs changed. Run the selected method again.");
+                refreshViewModel();
+                publishStateChanged();
+            });
+        connect(&m_panel, &CoatingAnalysisPanel::reproductionTemplateRequested,
+            this, &CoatingAnalysisModuleController::createReproductionTemplate);
+        connect(&m_panel, &CoatingAnalysisPanel::cancelReproductionRequested,
+            this, &CoatingAnalysisModuleController::cancelAlgorithmReproduction);
+        connect(&m_panel, &CoatingAnalysisPanel::reproductionExportRequested,
+            this, &CoatingAnalysisModuleController::exportAlgorithmReproduction);
 
         connect(&m_treePanel, &CoatingAnalysisTreePanel::waypointInfoRequested,
             this, &CoatingAnalysisModuleController::handleWaypointInfoRequested);
@@ -617,6 +684,8 @@ namespace robot_qt_viewer
 
         connect(&m_visibilityBar, &CoatingAnalysisVisibilityBar::showModelChanged,
             this, &CoatingAnalysisModuleController::setShowModel);
+        connect(&m_visibilityBar, &CoatingAnalysisVisibilityBar::showTrajectoryChanged,
+            this, &CoatingAnalysisModuleController::setShowTrajectory);
         connect(&m_visibilityBar, &CoatingAnalysisVisibilityBar::showSprayPointsChanged,
             this, &CoatingAnalysisModuleController::setShowSprayPoints);
         connect(&m_visibilityBar, &CoatingAnalysisVisibilityBar::showThicknessChanged,
@@ -637,6 +706,18 @@ namespace robot_qt_viewer
                 }
                 refreshViewModel();
             });
+        connect(m_reproductionJob.get(),
+            &AlgorithmReproductionJobController::progressChanged,
+            this, &CoatingAnalysisModuleController::handleReproductionProgress);
+        connect(m_reproductionJob.get(),
+            &AlgorithmReproductionJobController::reproductionFinished,
+            this, &CoatingAnalysisModuleController::handleReproductionFinished);
+        connect(m_reproductionJob.get(),
+            &AlgorithmReproductionJobController::reproductionFailed,
+            this, &CoatingAnalysisModuleController::handleReproductionFailed);
+        connect(m_reproductionJob.get(),
+            &AlgorithmReproductionJobController::runningChanged,
+            this, [this](bool) { refreshViewModel(); });
         refreshViewModel();
     }
 
@@ -649,7 +730,7 @@ namespace robot_qt_viewer
 
     void CoatingAnalysisModuleController::setCurrentResultAsReference()
     {
-        if(m_predictionJob->isRunning()) {
+        if(anyPredictionRunning()) {
             return;
         }
         if(!m_session.hasResult || m_session.prediction.field.empty()) {
@@ -675,22 +756,15 @@ namespace robot_qt_viewer
 
     void CoatingAnalysisModuleController::clearReferenceResult()
     {
-        if(m_predictionJob->isRunning() || m_referenceThickness.empty()) {
+        if(anyPredictionRunning() || m_referenceThickness.empty()) {
             return;
         }
         resetReferenceResult();
         if(m_session.showRelativeError) {
             m_session.overlay = m_session.thicknessOverlay;
             m_session.showRelativeError = false;
-            if(RobotQtViewerViewportServices* services = m_context.viewportServices()) {
-                QString error;
-                if(m_session.predictionDisplayModel) {
-                    services->applySurfaceScalarOverlayModel(
-                        m_session.overlay, *m_session.predictionDisplayModel, &error);
-                } else {
-                    services->applySurfaceScalarOverlay(m_session.overlay, &error);
-                }
-            }
+            QString error;
+            applyCurrentSurfaceOverlay(&error);
         }
         m_status = QStringLiteral("Reference result cleared.");
         refreshViewModel();
@@ -699,7 +773,7 @@ namespace robot_qt_viewer
 
     void CoatingAnalysisModuleController::checkCurrentResultAgainstReference()
     {
-        if(m_predictionJob->isRunning()) {
+        if(anyPredictionRunning()) {
             return;
         }
         if(m_referenceThickness.empty()) {
@@ -990,6 +1064,60 @@ namespace robot_qt_viewer
         return -1.0;
     }
 
+    void CoatingAnalysisModuleController::setThicknessDisplayRange(
+        double minimumMicrometers,
+        double maximumMicrometers)
+    {
+        if(anyPredictionRunning() || !m_session.hasResult
+            || m_session.showRelativeError
+            || !std::isfinite(minimumMicrometers)
+            || !std::isfinite(maximumMicrometers)
+            || minimumMicrometers < 0.0
+            || minimumMicrometers >= maximumMicrometers) {
+            return;
+        }
+
+        m_session.manualThicknessRange = true;
+        m_session.minimumDisplayThicknessMeters =
+            minimumMicrometers / kMetersToMicrometers;
+        m_session.maximumDisplayThicknessMeters =
+            maximumMicrometers / kMetersToMicrometers;
+        updateThicknessRangeAndStatistics();
+
+        QString error;
+        if(!applyCurrentSurfaceOverlay(&error)) {
+            m_status = error.isEmpty()
+                ? QStringLiteral("Failed to apply the thickness display range.")
+                : error;
+        } else {
+            m_status = QStringLiteral("Thickness display range updated.");
+        }
+        refreshViewModel();
+        emit statusMessageRequested(m_status, 3000);
+    }
+
+    void CoatingAnalysisModuleController::resetThicknessDisplayRange()
+    {
+        if(anyPredictionRunning() || !m_session.hasResult
+            || m_session.showRelativeError) {
+            return;
+        }
+
+        m_session.manualThicknessRange = false;
+        updateThicknessRangeAndStatistics();
+
+        QString error;
+        if(!applyCurrentSurfaceOverlay(&error)) {
+            m_status = error.isEmpty()
+                ? QStringLiteral("Failed to restore the automatic thickness range.")
+                : error;
+        } else {
+            m_status = QStringLiteral("Automatic thickness display range restored.");
+        }
+        refreshViewModel();
+        emit statusMessageRequested(m_status, 3000);
+    }
+
     void CoatingAnalysisModuleController::activate()
     {
         m_active = true;
@@ -1007,10 +1135,7 @@ namespace robot_qt_viewer
             if(RobotQtViewerViewportServices* services = m_context.viewportServices()) {
                 if(!services->setSurfaceScalarOverlayVisible(m_session.objectId, true)) {
                     QString error;
-                    const bool applied = m_session.predictionDisplayModel
-                        ? services->applySurfaceScalarOverlayModel(
-                            m_session.overlay, *m_session.predictionDisplayModel, &error)
-                        : services->applySurfaceScalarOverlay(m_session.overlay, &error);
+                    const bool applied = applyCurrentSurfaceOverlay(&error);
                     if(!applied) {
                         m_status = error;
                         m_session.clearResult();
@@ -1029,7 +1154,7 @@ namespace robot_qt_viewer
 
     void CoatingAnalysisModuleController::deactivate()
     {
-        if(m_simulationActive && !m_predictionJob->isRunning()) {
+        if(simulationActive() && !anyPredictionRunning()) {
             exitSimulation();
         }
         m_active = false;
@@ -1057,6 +1182,57 @@ namespace robot_qt_viewer
         m_visibilityBar.setLanguageCode(m_languageCode);
     }
 
+    void CoatingAnalysisModuleController::populateViewportContextMenu(QMenu* menu)
+    {
+        if(menu == nullptr || !m_active) {
+            return;
+        }
+
+        menu->addSeparator();
+        QMenu* visualizationMenu = menu->addMenu(
+            coatingAnalysisTranslate(m_languageCode, QStringLiteral("Visualize")));
+
+        QAction* modelAction = visualizationMenu->addAction(
+            coatingAnalysisTranslate(m_languageCode, QStringLiteral("Model")));
+        modelAction->setCheckable(true);
+        modelAction->setChecked(m_session.showModel);
+        modelAction->setEnabled(!m_session.objectId.isEmpty());
+        connect(modelAction, &QAction::toggled,
+            this, &CoatingAnalysisModuleController::setShowModel);
+
+        QAction* trajectoryAction = visualizationMenu->addAction(
+            coatingAnalysisTranslate(m_languageCode, QStringLiteral("Trajectory")));
+        trajectoryAction->setCheckable(true);
+        trajectoryAction->setChecked(m_session.showTrajectory);
+        trajectoryAction->setEnabled(!m_session.trajectory.empty());
+        connect(trajectoryAction, &QAction::toggled,
+            this, &CoatingAnalysisModuleController::setShowTrajectory);
+
+        QAction* sprayPointsAction = visualizationMenu->addAction(
+            coatingAnalysisTranslate(m_languageCode, QStringLiteral("Spray Points")));
+        sprayPointsAction->setCheckable(true);
+        sprayPointsAction->setChecked(m_session.showSprayPoints);
+        sprayPointsAction->setEnabled(!m_session.trajectory.empty());
+        connect(sprayPointsAction, &QAction::toggled,
+            this, &CoatingAnalysisModuleController::setShowSprayPoints);
+
+        QAction* thicknessAction = visualizationMenu->addAction(
+            coatingAnalysisTranslate(m_languageCode, QStringLiteral("Thickness Cloud")));
+        thicknessAction->setCheckable(true);
+        thicknessAction->setChecked(m_session.showThickness);
+        thicknessAction->setEnabled(m_session.hasResult);
+        connect(thicknessAction, &QAction::toggled,
+            this, &CoatingAnalysisModuleController::setShowThickness);
+
+        QAction* thicknessPickAction = visualizationMenu->addAction(
+            coatingAnalysisTranslate(m_languageCode, QStringLiteral("Thickness Pick")));
+        thicknessPickAction->setCheckable(true);
+        thicknessPickAction->setChecked(m_session.thicknessPickEnabled);
+        thicknessPickAction->setEnabled(m_session.hasResult && m_session.showThickness);
+        connect(thicknessPickAction, &QAction::toggled,
+            this, &CoatingAnalysisModuleController::setThicknessPickEnabled);
+    }
+
     void CoatingAnalysisModuleController::handleEvent(const RobotQtViewerEvent& event)
     {
         if(event.kind == RobotQtViewerEventKind::UiLanguageChanged) {
@@ -1077,7 +1253,7 @@ namespace robot_qt_viewer
                 services->setCoatingAnalysisView(m_active);
             }
             applyVisualizationState();
-            if(m_simulationActive && !m_predictionJob->isRunning()) {
+            if(simulationActive() && !anyPredictionRunning()) {
                 rebuildSimulation(false);
             }
             if(m_active && !m_session.objectId.isEmpty()) {
@@ -1161,7 +1337,20 @@ namespace robot_qt_viewer
                     makeResolveContext(m_context.projectSession()),
                     existing.sourcePath));
             if(existingPath == sourcePath) {
-                selectWorkpiece(QString::fromStdString(existing.id));
+                const QString existingId = QString::fromStdString(existing.id);
+                if(existingId == m_session.objectId) {
+                    m_session.manualThicknessRange = false;
+                    m_session.minimumDisplayThicknessMeters = 0.0;
+                    m_session.maximumDisplayThicknessMeters = 0.0;
+                    if(m_session.hasResult) {
+                        updateThicknessRangeAndStatistics();
+                        if(!m_session.showRelativeError) {
+                            QString applyError;
+                            applyCurrentSurfaceOverlay(&applyError);
+                        }
+                    }
+                }
+                selectWorkpiece(existingId);
                 m_status = QStringLiteral("Existing model reused. Run thickness prediction.");
                 refreshViewModel();
                 emit statusMessageRequested(m_status, 3000);
@@ -1282,8 +1471,8 @@ namespace robot_qt_viewer
             return false;
         }
 
-        const spraytrajectory::LegacySprayTrajectoryLoadResult loadResult =
-            spraytrajectory::LegacySprayTrajectoryIo::loadMatrixText(sourcePath);
+        const spraytrajectory::SprayTrajectoryLoadResult loadResult =
+            spraytrajectory::SprayTrajectoryIo::loadText(sourcePath);
         if(!loadResult.success) {
             m_status = loadResult.warnings.empty()
                 ? QStringLiteral("Failed to load the spray trajectory.")
@@ -1333,7 +1522,19 @@ namespace robot_qt_viewer
 
     void CoatingAnalysisModuleController::selectModelFileFromDialog()
     {
-        const QString path = PaintingAnalysisDialogService::selectModelFile(&m_panel);
+        QString title = QStringLiteral("Open Coating Analysis Model");
+        QString filter = QStringLiteral(
+            "Mesh Models (*.stl *.obj *.dae *.ply);;All Files (*.*)");
+        if(reproductionActive()) {
+            const PublishedReproductionInputProfile profile =
+                PublishedReproductionAdapter::inputProfile(
+                    m_panel.reproductionAlgorithm());
+            title = coatingAnalysisTranslate(m_languageCode,
+                QString::fromStdString(profile.modelDialogTitle));
+            filter = QString::fromStdString(profile.modelDialogFilter);
+        }
+        const QString path = PaintingAnalysisDialogService::selectModelFile(
+            &m_panel, title, filter);
         if(path.isEmpty()) {
             return;
         }
@@ -1350,7 +1551,16 @@ namespace robot_qt_viewer
 
     void CoatingAnalysisModuleController::selectTrajectoryFileFromDialog()
     {
-        const QString path = PaintingAnalysisDialogService::selectTrajectoryFile(&m_panel);
+        QString title = QStringLiteral("Open Spray Trajectory");
+        if(reproductionActive()) {
+            const PublishedReproductionInputProfile profile =
+                PublishedReproductionAdapter::inputProfile(
+                    m_panel.reproductionAlgorithm());
+            title = coatingAnalysisTranslate(m_languageCode,
+                QString::fromStdString(profile.trajectoryDialogTitle));
+        }
+        const QString path = PaintingAnalysisDialogService::selectTrajectoryFile(
+            &m_panel, title);
         if(path.isEmpty()) {
             return;
         }
@@ -1359,7 +1569,7 @@ namespace robot_qt_viewer
 
     void CoatingAnalysisModuleController::predictThickness()
     {
-        if(m_predictionJob->isRunning()) {
+        if(anyPredictionRunning()) {
             return;
         }
         const simulation_project::SceneObjectDesc* object =
@@ -1542,7 +1752,8 @@ namespace robot_qt_viewer
             task.workpiece = std::move(mesh.workpiece);
             task.trajectory = m_session.trajectory;
             task.tool.name = "Legacy spray gun";
-            task.tool.sprayDirectionLocal = Eigen::Vector3d::UnitX();
+            task.tool.sprayDirectionLocal = m_panel.sprayDirectionLocal();
+            task.tool.powderFeedDirectionLocal = m_panel.powderFeedDirectionLocal();
             task.process.id = spraythickness::thicknessModelId(task.model);
             task.process.name = task.process.id;
             task.options.base.trajectorySamplingMode = m_panel.trajectorySamplingMode();
@@ -1646,9 +1857,24 @@ namespace robot_qt_viewer
         }
     }
 
+    bool CoatingAnalysisModuleController::simulationActive() const
+    {
+        return m_mode == CoatingAnalysisMode::Simulation;
+    }
+
+    bool CoatingAnalysisModuleController::reproductionActive() const
+    {
+        return m_mode == CoatingAnalysisMode::Reproduction;
+    }
+
+    bool CoatingAnalysisModuleController::anyPredictionRunning() const
+    {
+        return m_predictionJob->isRunning() || m_reproductionJob->isRunning();
+    }
+
     void CoatingAnalysisModuleController::enterSimulation()
     {
-        if(m_predictionJob->isRunning()) {
+        if(anyPredictionRunning()) {
             return;
         }
         m_savedSimulationSession = m_session;
@@ -1656,15 +1882,16 @@ namespace robot_qt_viewer
         m_session.clear();
         m_session.objectId = QString::fromLatin1(kSimulationPlateObjectId);
         m_session.showModel = true;
+        m_session.showTrajectory = true;
         m_session.showSprayPoints = true;
-        m_simulationActive = true;
+        m_mode = CoatingAnalysisMode::Simulation;
         m_simulationStatus = QStringLiteral("Simulation mode active.");
         rebuildSimulation(false, true);
     }
 
     void CoatingAnalysisModuleController::exitSimulation()
     {
-        if(m_predictionJob->isRunning()) {
+        if(anyPredictionRunning() || !simulationActive()) {
             return;
         }
         const QString simulationObjectId =
@@ -1679,7 +1906,7 @@ namespace robot_qt_viewer
             services->setCoatingModelVisible(simulationObjectId, false);
             services->setCoatingTrajectoryPreview({}, false);
         }
-        m_simulationActive = false;
+        m_mode = CoatingAnalysisMode::Prediction;
         m_simulationReady = false;
         m_simulation = SimulationExperimentData();
         m_simulationReadyStatus.clear();
@@ -1706,7 +1933,7 @@ namespace robot_qt_viewer
 
     void CoatingAnalysisModuleController::rebuildSimulation(bool runAfterBuild, bool focusView)
     {
-        if(!m_simulationActive || m_predictionJob->isRunning()) {
+        if(!simulationActive() || anyPredictionRunning()) {
             return;
         }
         if(m_session.hasResult) {
@@ -1783,7 +2010,11 @@ namespace robot_qt_viewer
                     preview.push_back(item);
                 }
             }
-            services->setCoatingTrajectoryPreview(preview, true);
+            services->setCoatingTrajectoryPreview(
+                preview,
+                m_session.showTrajectory || m_session.showSprayPoints,
+                m_session.showTrajectory,
+                m_session.showSprayPoints);
         }
         m_session.modelInfo = makeModelInfo(*m_simulation.displayModel,
             Eigen::Isometry3d::Identity());
@@ -1823,11 +2054,11 @@ namespace robot_qt_viewer
             m_simulation.workpiece.triangleIndices.size();
         const std::size_t activeSprayIntervals = countActiveSprayIntervals(
             m_simulation.trajectory);
-        if(!m_simulationActive) {
+        if(!simulationActive()) {
             runError = QStringLiteral("Enter simulation mode before running it.");
         } else if(!m_simulationReady) {
             runError = QStringLiteral("Build the simulation plate before running it.");
-        } else if(m_predictionJob->isRunning()) {
+        } else if(anyPredictionRunning()) {
             runError = QStringLiteral("A thickness prediction is already running.");
         } else if(m_simulation.trajectory.empty()) {
             runError = QStringLiteral(
@@ -1864,6 +2095,7 @@ namespace robot_qt_viewer
         task.trajectory = m_simulation.trajectory;
         task.tool.name = "Simulation spray gun";
         task.tool.sprayDirectionLocal = Eigen::Vector3d::UnitZ();
+        task.tool.powderFeedDirectionLocal = Eigen::Vector3d::UnitX();
         // Simulation points use the simulation segment's process ID.  The
         // GPU backend filters trajectory samples by this ID; using the
         // Gaussian model ID here would discard every simulation sample
@@ -1903,7 +2135,7 @@ namespace robot_qt_viewer
 
     void CoatingAnalysisModuleController::exportSimulationResult()
     {
-        if(!m_simulationActive || !m_session.hasResult) {
+        if(!simulationActive() || !m_session.hasResult) {
             return;
         }
         QSettings settings;
@@ -1938,10 +2170,450 @@ namespace robot_qt_viewer
         emit statusMessageRequested(m_status, 5000);
     }
 
+    void CoatingAnalysisModuleController::enterReproduction()
+    {
+        if(anyPredictionRunning()) {
+            return;
+        }
+        m_mode = CoatingAnalysisMode::Reproduction;
+        m_reproductionStatus = m_session.hasReproductionResult
+            ? m_reproductionStatus
+            : QStringLiteral("Select a published algorithm and run its reproduction.");
+        m_status = QStringLiteral("Algorithm reproduction mode active.");
+        refreshViewModel();
+    }
+
+    void CoatingAnalysisModuleController::exitReproduction()
+    {
+        if(anyPredictionRunning() || !reproductionActive()) {
+            return;
+        }
+        m_mode = CoatingAnalysisMode::Prediction;
+        m_status = QStringLiteral("Exited algorithm reproduction mode.");
+        refreshViewModel();
+    }
+
+    void CoatingAnalysisModuleController::runAlgorithmReproduction()
+    {
+        if(!reproductionActive() || anyPredictionRunning()) {
+            return;
+        }
+        const simulation_project::SceneObjectDesc* object =
+            findObject(m_context.document(), m_session.objectId);
+        RobotQtViewerViewportServices* services = m_context.viewportServices();
+        if(object == nullptr || services == nullptr || m_session.trajectory.empty()) {
+            m_status = QStringLiteral(
+                "The analysis model, trajectory, or viewport is unavailable.");
+            m_reproductionStatus = m_status;
+            refreshViewModel();
+            return;
+        }
+
+        const std::filesystem::path sourcePath =
+            simulation_project::AssetResolver::resolveProjectPath(
+                makeResolveContext(m_context.projectSession()), object->sourcePath);
+        std::string loadError;
+        const std::shared_ptr<assetcore::ModelDesc> model =
+            assetcore::AssetManager::instance().tryLoadModel(
+                sourcePath.generic_u8string(), static_cast<float>(object->visualScale),
+                &loadError);
+        if(!model) {
+            m_status = QString::fromStdString(loadError.empty()
+                ? "Failed to load the analysis mesh."
+                : loadError);
+            m_reproductionStatus = m_status;
+            refreshViewModel();
+            return;
+        }
+
+        try {
+            PaintingAnalysisMeshData mesh = PaintingAnalysisMeshAdapter::build(
+                *model, object->name, sourcePath.generic_u8string(),
+                makeTransform(object->transform));
+            if(mesh.workpiece.empty()) {
+                throw std::runtime_error("The model has no mesh vertices.");
+            }
+            services->setSurfaceScalarProbeEnabled(false, QString());
+            if(m_session.hasResult) {
+                services->clearSurfaceScalarOverlay(m_session.objectId);
+            }
+            m_session.clearResult();
+            m_session.binding = std::move(mesh.binding);
+            m_session.predictionDisplayModel = std::move(mesh.displayModel);
+            m_reproductionWorkpiece = mesh.workpiece;
+            m_predictionObjectId = QString::fromStdString(object->id);
+            m_predictionProgress = 0.0;
+            m_predictionStartedAt = std::chrono::steady_clock::now();
+            m_predictionTimerActive = true;
+
+            const spraythickness::ReproductionAlgorithmKind algorithm =
+                m_panel.reproductionAlgorithm();
+            m_status = QStringLiteral("Running %1...")
+                .arg(QString::fromLatin1(
+                    spraythickness::reproductionAlgorithmName(algorithm)));
+            m_reproductionStatus = m_status;
+            refreshViewModel();
+            publishStateChanged();
+
+            QString startError;
+            if(algorithm
+                == spraythickness::ReproductionAlgorithmKind::CurrentMethod) {
+                spraythickness::ThicknessPredictionTask task;
+                task.model = m_panel.thicknessModel();
+                task.workpiece = std::move(mesh.workpiece);
+                task.trajectory = m_session.trajectory;
+                task.tool.name = "Legacy spray gun";
+                task.tool.sprayDirectionLocal = m_panel.sprayDirectionLocal();
+                task.tool.powderFeedDirectionLocal =
+                    m_panel.powderFeedDirectionLocal();
+                task.process.id = spraythickness::thicknessModelId(task.model);
+                task.process.name = task.process.id;
+                task.options.base.trajectorySamplingMode =
+                    m_panel.trajectorySamplingMode();
+                task.options.base.timeStep = m_panel.timeStepSeconds();
+                task.options.enableBvhOcclusion = m_panel.bvhOcclusionEnabled();
+                task.options.enableHistoryCorrection =
+                    m_panel.historyCorrectionEnabled();
+                m_reproductionGpuRun = true;
+                if(!m_predictionJob->start(std::move(task), &startError)) {
+                    m_reproductionGpuRun = false;
+                    throw std::runtime_error(startError.toStdString());
+                }
+            } else {
+                spraycore::SprayTool tool;
+                tool.name = "Legacy spray gun";
+                tool.sprayDirectionLocal = m_panel.sprayDirectionLocal();
+                tool.powderFeedDirectionLocal = m_panel.powderFeedDirectionLocal();
+                PublishedReproductionRuntimeInputs runtimeInputs =
+                    m_panel.reproductionRuntimeInputs();
+                runtimeInputs.modelSourcePath = sourcePath;
+                spraythickness::AlgorithmReproductionTask task =
+                    PublishedReproductionAdapter::buildTask(
+                        algorithm,
+                        mesh.workpiece,
+                        m_session.trajectory,
+                        tool,
+                        m_panel.trajectorySamplingMode(),
+                        m_panel.timeStepSeconds(),
+                        std::filesystem::path(
+                            m_panel.reproductionConfigurationPath().toStdWString()),
+                        runtimeInputs);
+                if(!m_reproductionJob->start(std::move(task), &startError)) {
+                    throw std::runtime_error(startError.toStdString());
+                }
+            }
+        } catch(const std::exception& exception) {
+            m_predictionObjectId.clear();
+            m_predictionProgress = 0.0;
+            m_predictionTimerActive = false;
+            m_reproductionGpuRun = false;
+            m_session.clearResult();
+            m_status = QString::fromLocal8Bit(exception.what());
+            m_reproductionStatus = m_status;
+            refreshViewModel();
+            publishStateChanged();
+        }
+    }
+
+    void CoatingAnalysisModuleController::createReproductionTemplate()
+    {
+        const auto algorithm = m_panel.reproductionAlgorithm();
+        if(algorithm == spraythickness::ReproductionAlgorithmKind::CurrentMethod
+            || anyPredictionRunning()) {
+            return;
+        }
+        QSettings settings;
+        const QString directory = settings.value(
+            QString::fromLatin1(kReproductionExportDirectorySettingsKey)).toString();
+        const QString fileName = QString::fromLatin1(
+            spraythickness::reproductionAlgorithmId(algorithm)) + QStringLiteral(".json");
+        const QString initialPath = directory.isEmpty()
+            ? fileName : QDir(directory).filePath(fileName);
+        const QString path = QFileDialog::getSaveFileName(
+            &m_panel, QStringLiteral("Create calibration template"),
+            initialPath, QStringLiteral("JSON files (*.json)"));
+        if(path.isEmpty()) {
+            return;
+        }
+        try {
+            PublishedReproductionAdapter::writeConfigurationTemplate(
+                algorithm, std::filesystem::path(path.toStdWString()));
+            m_panel.setReproductionConfigurationPath(path);
+            settings.setValue(
+                QString::fromLatin1(kReproductionExportDirectorySettingsKey),
+                QFileInfo(path).absolutePath());
+            m_status = QStringLiteral(
+                "Calibration template created. Replace every null value before running.");
+            m_reproductionStatus = m_status;
+            refreshViewModel();
+            emit statusMessageRequested(m_status, 5000);
+        } catch(const std::exception& exception) {
+            m_status = QString::fromLocal8Bit(exception.what());
+            m_reproductionStatus = m_status;
+            refreshViewModel();
+        }
+    }
+
+    void CoatingAnalysisModuleController::cancelAlgorithmReproduction()
+    {
+        if(!reproductionActive()) {
+            return;
+        }
+        m_predictionJob->cancel();
+        m_reproductionJob->cancel();
+        m_status = QStringLiteral("Canceling algorithm reproduction...");
+        m_reproductionStatus = m_status;
+        refreshViewModel();
+    }
+
+    void CoatingAnalysisModuleController::handleReproductionProgress(
+        double progress,
+        const QString& message)
+    {
+        if(m_predictionObjectId.isEmpty()) {
+            return;
+        }
+        m_predictionProgress = std::clamp(progress, 0.0, 1.0);
+        m_status = message;
+        m_reproductionStatus = message;
+        refreshViewModel();
+    }
+
+    void CoatingAnalysisModuleController::handleReproductionFinished(
+        const spraythickness::AlgorithmReproductionResult& result)
+    {
+        if(spraythickness::reproductionCanceled(result)) {
+            m_predictionObjectId.clear();
+            m_predictionProgress = 0.0;
+            m_predictionTimerActive = false;
+            m_session.clearResult();
+            m_status = QStringLiteral("Algorithm reproduction canceled.");
+            m_reproductionStatus = m_status;
+            refreshViewModel();
+            publishStateChanged();
+            return;
+        }
+        PublishedReproductionDisplayData display;
+        try {
+            display = PublishedReproductionDisplayAdapter::build(
+                result, m_reproductionWorkpiece, m_session.binding);
+        } catch(const std::exception& exception) {
+            handleReproductionFailed(QStringLiteral(
+                "Reproduction display conversion failed: %1")
+                    .arg(QString::fromLocal8Bit(exception.what())));
+            return;
+        }
+        m_session.reproduction = result;
+        m_session.hasReproductionResult = true;
+        m_session.binding = display.binding;
+        m_session.predictionDisplayModel = display.displayModel;
+        handlePredictionFinished(display.scalarField);
+        if(!m_session.hasResult) {
+            return;
+        }
+        const auto& statistics = spraythickness::reproductionStatistics(result);
+        const QString domain = QString::fromStdString(display.domainLabel);
+        m_reproductionStatus = QStringLiteral(
+            "%1 completed in %2 ms.\n"
+            "Output: %3; elements: %4; candidates: %5; "
+            "occlusion queries: %6; occluded: %7.")
+            .arg(QString::fromLatin1(
+                spraythickness::reproductionAlgorithmName(result.algorithm)))
+            .arg(statistics.elapsedMilliseconds, 0, 'f', 3)
+            .arg(domain)
+            .arg(static_cast<qulonglong>(statistics.evaluatedElementCount))
+            .arg(static_cast<qulonglong>(statistics.candidatePairCount))
+            .arg(static_cast<qulonglong>(statistics.visibilityQueryCount))
+            .arg(static_cast<qulonglong>(statistics.hiddenElementCount));
+        for(const std::string& note :
+            spraythickness::reproductionImplementationNotes(result)) {
+            m_reproductionStatus += QStringLiteral("\n")
+                + QString::fromStdString(note);
+        }
+        m_status = m_reproductionStatus;
+        refreshViewModel();
+        publishStateChanged();
+    }
+
+    void CoatingAnalysisModuleController::handleReproductionFailed(
+        const QString& message)
+    {
+        if(m_predictionObjectId.isEmpty()) {
+            return;
+        }
+        m_predictionObjectId.clear();
+        m_predictionProgress = 0.0;
+        m_predictionTimerActive = false;
+        m_session.clearResult();
+        m_status = message.isEmpty()
+            ? QStringLiteral("Algorithm reproduction failed.")
+            : message;
+        m_reproductionStatus = m_status;
+        refreshViewModel();
+        publishStateChanged();
+        emit statusMessageRequested(m_status, 5000);
+    }
+
+    void CoatingAnalysisModuleController::exportAlgorithmReproduction()
+    {
+        if(!reproductionActive() || !m_session.hasReproductionResult
+            || !m_session.hasResult) {
+            return;
+        }
+        QSettings settings;
+        const QString exportDirectory = settings.value(
+            QString::fromLatin1(kReproductionExportDirectorySettingsKey)).toString();
+        const QString algorithmId = QString::fromLatin1(
+            spraythickness::reproductionAlgorithmId(
+                m_session.reproduction.algorithm));
+        const bool surfaceGeometry = m_session.reproduction.algorithm
+                == spraythickness::ReproductionAlgorithmKind::Vanerio2021
+            || m_session.reproduction.algorithm
+                == spraythickness::ReproductionAlgorithmKind::DynamicSurface2026;
+        const QString extension = surfaceGeometry
+            ? QStringLiteral(".stl") : QStringLiteral(".csv");
+        const QString initialPath = exportDirectory.isEmpty()
+            ? algorithmId + extension
+            : QDir(exportDirectory).filePath(algorithmId + extension);
+        const QString path = QFileDialog::getSaveFileName(
+            &m_panel,
+            QStringLiteral("Export algorithm reproduction"),
+            initialPath,
+            surfaceGeometry ? QStringLiteral("STL files (*.stl)")
+                            : QStringLiteral("CSV files (*.csv)"));
+        if(path.isEmpty()) {
+            return;
+        }
+
+        QFile file(path);
+        if(!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            m_status = QStringLiteral("Reproduction export failed: %1")
+                .arg(file.errorString());
+            m_reproductionStatus = m_status;
+            refreshViewModel();
+            return;
+        }
+        QTextStream stream(&file);
+        stream.setCodec("UTF-8");
+        if(surfaceGeometry) {
+            const spraythickness::published::TriangleMesh* mesh = nullptr;
+            if(const auto* vanerio = std::get_if<
+                    spraythickness::published::VanerioResult>(
+                    &m_session.reproduction.nativeResult)) {
+                mesh = &vanerio->evolvedStlSurface;
+            } else if(const auto* dynamic = std::get_if<
+                    spraythickness::published::DynamicSurfaceResult>(
+                    &m_session.reproduction.nativeResult)) {
+                mesh = &dynamic->evolvedStlSurface;
+            }
+            if(mesh == nullptr) {
+                m_status = QStringLiteral(
+                    "Reproduction export failed: dynamic result has no STL surface.");
+                m_reproductionStatus = m_status;
+                refreshViewModel();
+                return;
+            }
+            stream << "solid " << algorithmId << '\n';
+            for(std::size_t faceIndex = 0;
+                faceIndex < mesh->faces.size(); ++faceIndex) {
+                const Eigen::Vector3d normal =
+                    spraythickness::published::faceNormal(*mesh, faceIndex);
+                const auto& face = mesh->faces[faceIndex];
+                stream << "  facet normal " << normal.x() << ' ' << normal.y()
+                       << ' ' << normal.z() << '\n';
+                stream << "    outer loop\n";
+                for(const std::uint32_t vertex : face) {
+                    const Eigen::Vector3d& point = mesh->vertices[vertex];
+                    stream << "      vertex " << point.x() << ' ' << point.y()
+                           << ' ' << point.z() << '\n';
+                }
+                stream << "    endloop\n  endfacet\n";
+            }
+            stream << "endsolid " << algorithmId << '\n';
+        } else {
+            const auto& statistics = spraythickness::reproductionStatistics(
+                m_session.reproduction);
+            stream << "algorithm," << algorithmId << '\n';
+            stream << "elapsed_ms," << statistics.elapsedMilliseconds << '\n';
+            std::visit([&](const auto& native) {
+                using Result = std::decay_t<decltype(native)>;
+                if constexpr(std::is_same_v<Result,
+                    spraythickness::CurrentMethodReproductionResult>) {
+                    stream << "domain,index,x_m,y_m,z_m,thickness_m\n";
+                    for(const auto& value : native.prediction.field.results) {
+                        if(value.sampleIndex >= m_reproductionWorkpiece.samples.size()) {
+                            continue;
+                        }
+                        const Eigen::Vector3d& point =
+                            m_reproductionWorkpiece.samples[value.sampleIndex].position;
+                        stream << "vertex," << value.sampleIndex << ',' << point.x()
+                               << ',' << point.y() << ',' << point.z() << ','
+                               << value.thickness << '\n';
+                    }
+                } else if constexpr(std::is_same_v<Result,
+                    spraythickness::published::TanakaResult>) {
+                    stream << "domain,index,x_m,y_m,z_m,thickness_m\n";
+                    for(std::size_t index = 0;
+                        index < native.pointThicknessMeters.size(); ++index) {
+                        const Eigen::Vector3d& point =
+                            m_reproductionWorkpiece.samples[index].position;
+                        stream << "target_point," << index << ',' << point.x() << ','
+                               << point.y() << ',' << point.z() << ','
+                               << native.pointThicknessMeters[index] << '\n';
+                    }
+                } else if constexpr(std::is_same_v<Result,
+                    spraythickness::published::TzinavaResult>) {
+                    stream << "domain,index,x_m,y_m,z_m,thickness_m\n";
+                    for(std::size_t index = 0;
+                        index < native.faceThicknessMeters.size(); ++index) {
+                        const Eigen::Vector3d& point = native.faceCentroids[index];
+                        stream << "face," << index << ',' << point.x() << ','
+                               << point.y() << ',' << point.z() << ','
+                               << native.faceThicknessMeters[index] << '\n';
+                    }
+                } else if constexpr(std::is_same_v<Result,
+                    spraythickness::published::FukeResult>) {
+                    stream << "domain,index,x_m,y_m,z_m,thickness_m\n";
+                    for(std::size_t index = 0;
+                        index < native.polygonThicknessMeters.size(); ++index) {
+                        const Eigen::Vector3d& point = native.polygonCentroids[index];
+                        stream << "polygon," << index << ',' << point.x() << ','
+                               << point.y() << ',' << point.z() << ','
+                               << native.polygonThicknessMeters[index] << '\n';
+                    }
+                } else if constexpr(std::is_same_v<Result,
+                    spraythickness::published::WuResult>) {
+                    stream << "index,base_x_m,base_y_m,base_z_m,direction_x,"
+                              "direction_y,direction_z,radius_m,height_m\n";
+                    for(std::size_t index = 0;
+                        index < native.depositedCylinders.size(); ++index) {
+                        const auto& cylinder = native.depositedCylinders[index];
+                        stream << index << ',' << cylinder.baseCenter.x() << ','
+                               << cylinder.baseCenter.y() << ','
+                               << cylinder.baseCenter.z() << ','
+                               << cylinder.growthDirection.x() << ','
+                               << cylinder.growthDirection.y() << ','
+                               << cylinder.growthDirection.z() << ','
+                               << cylinder.radiusMeters << ','
+                               << cylinder.heightMeters << '\n';
+                    }
+                }
+            }, m_session.reproduction.nativeResult);
+        }
+        file.close();
+        settings.setValue(
+            QString::fromLatin1(kReproductionExportDirectorySettingsKey),
+            QFileInfo(path).absolutePath());
+        m_status = QStringLiteral("Algorithm reproduction exported to %1.").arg(path);
+        m_reproductionStatus = m_status;
+        refreshViewModel();
+        emit statusMessageRequested(m_status, 5000);
+    }
+
     void CoatingAnalysisModuleController::previewLocalInputs()
     {
         const auto previewStart = std::chrono::steady_clock::now();
-        if(m_predictionJob->isRunning() || m_session.trajectory.empty() ||
+        if(anyPredictionRunning() || m_session.trajectory.empty() ||
             !ensurePreviewWorkpieceLoaded() || !hasEffectiveRotationAxis()) {
             m_status = QStringLiteral(
                 "Configure a fitted or manual rotation axis and load a trajectory before previewing local inputs.");
@@ -1952,7 +2624,8 @@ namespace robot_qt_viewer
         spraythickness::ThicknessPredictionTask task;
         task.trajectory = m_session.trajectory;
         task.tool.name = "Legacy spray gun";
-        task.tool.sprayDirectionLocal = Eigen::Vector3d::UnitX();
+        task.tool.sprayDirectionLocal = m_panel.sprayDirectionLocal();
+        task.tool.powderFeedDirectionLocal = m_panel.powderFeedDirectionLocal();
         task.process.id = spraythickness::thicknessModelId(m_panel.thicknessModel());
         task.options.base.trajectorySamplingMode = m_panel.trajectorySamplingMode();
         task.options.base.timeStep = m_panel.timeStepSeconds();
@@ -2190,7 +2863,7 @@ namespace robot_qt_viewer
 
     void CoatingAnalysisModuleController::selectAxisymmetricProfileRegion()
     {
-        if(m_predictionJob->isRunning() || !ensurePreviewWorkpieceLoaded()
+        if(anyPredictionRunning() || !ensurePreviewWorkpieceLoaded()
             || !hasEffectiveRotationAxis() || !ensureAxisymmetricProfileSlice()) {
             refreshViewModel();
             return;
@@ -2261,6 +2934,7 @@ namespace robot_qt_viewer
     void CoatingAnalysisModuleController::handlePredictionFinished(
         const spraythickness::ThicknessPredictionResult& prediction)
     {
+        const bool reproductionGpu = m_reproductionGpuRun;
         const QString objectId = m_predictionObjectId;
         if(objectId.isEmpty()) {
             return;
@@ -2274,6 +2948,7 @@ namespace robot_qt_viewer
         m_predictionProgress = 0.0;
 
         if(prediction.field.empty()) {
+            m_reproductionGpuRun = false;
             m_session.clearResult();
             m_status = prediction.warnings.empty()
                 ? QStringLiteral("GPU thickness prediction produced no result.")
@@ -2289,6 +2964,7 @@ namespace robot_qt_viewer
         RobotQtViewerViewportServices* services = m_context.viewportServices();
         if(services == nullptr || (objectId != QString::fromLatin1(kSimulationPlateObjectId)
                 && findObject(m_context.document(), objectId) == nullptr)) {
+            m_reproductionGpuRun = false;
             m_session.clearResult();
             m_status = QStringLiteral("The analysis model or viewport is no longer available.");
             if(objectId == QString::fromLatin1(kSimulationPlateObjectId)) {
@@ -2305,6 +2981,10 @@ namespace robot_qt_viewer
                     objectId.toStdString(),
                     m_session.binding,
                     prediction);
+            if(m_session.manualThicknessRange) {
+                overlay.range.minimum = m_session.minimumDisplayThicknessMeters;
+                overlay.range.maximum = m_session.maximumDisplayThicknessMeters;
+            }
             // Restore the original workpiece before creating the thickness
             // model. Otherwise deferred local-debug cleanup can replace the
             // freshly uploaded thickness overlay on the next viewport frame.
@@ -2313,9 +2993,10 @@ namespace robot_qt_viewer
             const bool customDisplay = m_session.predictionDisplayModel != nullptr;
             const bool overlayApplied = customDisplay
                 ? services->applySurfaceScalarOverlayModel(
-                    overlay, *m_session.predictionDisplayModel, &applyError)
-                : services->applySurfaceScalarOverlay(overlay, &applyError);
+                    overlay, *m_session.predictionDisplayModel, &applyError, true)
+                : services->applySurfaceScalarOverlay(overlay, &applyError, true);
             if(!overlayApplied) {
+                m_reproductionGpuRun = false;
                 m_session.clearResult();
                 m_status = applyError.isEmpty()
                     ? QStringLiteral("Failed to display the thickness result.")
@@ -2335,6 +3016,24 @@ namespace robot_qt_viewer
             m_session.predictionElapsedSeconds = elapsedSeconds;
             m_session.hasResult = true;
             m_session.showThickness = true;
+            updateThicknessRangeAndStatistics();
+            if(reproductionGpu) {
+                m_session.reproduction = spraythickness::AlgorithmReproductionResult();
+                m_session.reproduction.algorithm =
+                    spraythickness::ReproductionAlgorithmKind::CurrentMethod;
+                spraythickness::CurrentMethodReproductionResult current;
+                current.prediction = prediction;
+                current.thicknessModel = m_panel.thicknessModel();
+                current.bvhOcclusion = m_panel.bvhOcclusionEnabled();
+                current.historyCorrection = m_panel.historyCorrectionEnabled();
+                current.statistics.elapsedMilliseconds = elapsedSeconds * 1000.0;
+                current.statistics.evaluatedElementCount =
+                    prediction.field.results.size();
+                current.statistics.trajectorySampleCount =
+                    prediction.timing.sprayPointCount;
+                m_session.reproduction.nativeResult = std::move(current);
+                m_session.hasReproductionResult = true;
+            }
             // Ensure the prediction workpiece node is visible so the scalar
             // overlay model actually renders.
             services->setCoatingModelVisible(objectId, true);
@@ -2342,6 +3041,15 @@ namespace robot_qt_viewer
             services->setSurfaceScalarProbeEnabled(false, QString());
             m_status = QStringLiteral("GPU thickness prediction completed in %1 s.")
                 .arg(elapsedSeconds, 0, 'f', 3);
+            if(reproductionGpu) {
+                m_reproductionStatus = QStringLiteral(
+                    "Current method (GPU) completed in %1 s.\n"
+                    "Output: vertices; elements: %2; spray samples: %3.")
+                    .arg(elapsedSeconds, 0, 'f', 3)
+                    .arg(static_cast<qulonglong>(prediction.field.results.size()))
+                    .arg(static_cast<qulonglong>(prediction.timing.sprayPointCount));
+                m_status = m_reproductionStatus;
+            }
             if(objectId == QString::fromLatin1(kSimulationPlateObjectId)) {
                 const double activeDuration = activeSprayDurationSeconds(m_simulation.trajectory);
                 const double volume = thicknessVolumeCubicMillimeters(
@@ -2358,7 +3066,9 @@ namespace robot_qt_viewer
             refreshViewModel();
             publishStateChanged();
             emit statusMessageRequested(m_status, 3000);
+            m_reproductionGpuRun = false;
         } catch(const std::exception& exception) {
+            m_reproductionGpuRun = false;
             services->clearSurfaceScalarOverlay(objectId);
             services->clearCoatingPredictionModel(objectId);
             m_session.clearResult();
@@ -2378,6 +3088,8 @@ namespace robot_qt_viewer
         }
         const bool simulation =
             m_predictionObjectId == QString::fromLatin1(kSimulationPlateObjectId);
+        const bool reproductionGpu = m_reproductionGpuRun;
+        m_reproductionGpuRun = false;
         m_predictionObjectId.clear();
         m_predictionProgress = 0.0;
         m_predictionTimerActive = false;
@@ -2391,6 +3103,8 @@ namespace robot_qt_viewer
             : message;
         if(simulation) {
             m_simulationStatus = m_status + QStringLiteral("\n") + m_simulationReadyStatus;
+        } else if(reproductionGpu) {
+            m_reproductionStatus = m_status;
         }
         refreshViewModel();
         publishStateChanged();
@@ -2401,6 +3115,13 @@ namespace robot_qt_viewer
     {
         m_session.showModel = enabled;
         applyModelVisibilityOverrides();
+        refreshViewModel();
+    }
+
+    void CoatingAnalysisModuleController::setShowTrajectory(bool enabled)
+    {
+        m_session.showTrajectory = enabled;
+        updateTrajectoryPreviewVisibility();
         refreshViewModel();
     }
 
@@ -2443,10 +3164,7 @@ namespace robot_qt_viewer
                         m_session.showThickness)
                     && m_session.showThickness) {
                     QString error;
-                    const bool applied = m_session.predictionDisplayModel
-                        ? services->applySurfaceScalarOverlayModel(
-                            m_session.overlay, *m_session.predictionDisplayModel, &error)
-                        : services->applySurfaceScalarOverlay(m_session.overlay, &error);
+                    const bool applied = applyCurrentSurfaceOverlay(&error);
                     if(!applied) {
                         m_session.clearResult();
                         m_status = error.isEmpty()
@@ -2480,7 +3198,7 @@ namespace robot_qt_viewer
         const simulation_project::SceneObjectDesc* object =
             findObject(m_context.document(), objectId);
         if(object == nullptr || object->objectType != "workpiece" ||
-            objectId == m_session.objectId || m_predictionJob->isRunning()) {
+            objectId == m_session.objectId || anyPredictionRunning()) {
             refreshViewModel();
             return;
         }
@@ -2497,6 +3215,9 @@ namespace robot_qt_viewer
             }
         }
         m_session.clearResult();
+        m_session.manualThicknessRange = false;
+        m_session.minimumDisplayThicknessMeters = 0.0;
+        m_session.maximumDisplayThicknessMeters = 0.0;
         resetReferenceResult();
         m_session.objectId = objectId;
         m_session.modelName = QString::fromStdString(object->name);
@@ -2632,7 +3353,8 @@ namespace robot_qt_viewer
     void CoatingAnalysisModuleController::clearSession()
     {
         m_predictionJob->cancel();
-        if(m_simulationActive) {
+        m_reproductionJob->cancel();
+        if(simulationActive()) {
             if(RobotQtViewerViewportServices* services = m_context.viewportServices()) {
                 if(!m_session.objectId.isEmpty()) {
                     services->clearCoatingPredictionModel(m_session.objectId);
@@ -2640,7 +3362,7 @@ namespace robot_qt_viewer
                 }
                 services->setCoatingTrajectoryPreview({}, false);
             }
-            m_simulationActive = false;
+            m_mode = CoatingAnalysisMode::Prediction;
             m_simulationReady = false;
             m_simulation = SimulationExperimentData();
         }
@@ -2658,6 +3380,9 @@ namespace robot_qt_viewer
             }
         }
         m_session.clear();
+        m_reproductionWorkpiece = sprayworkpiece::WorkpieceModel();
+        m_reproductionStatus = QStringLiteral("No reproduction result yet.");
+        m_reproductionGpuRun = false;
         m_hasRotationAxis = false;
         m_rotationPreviewWorkpiece = sprayworkpiece::WorkpieceModel();
         m_rotationSurfaceTriangleIndices.clear();
@@ -2691,14 +3416,20 @@ namespace robot_qt_viewer
         if(services == nullptr) {
             return;
         }
-        const bool visible = m_active && m_session.showSprayPoints &&
-            !m_session.waypoints.empty();
-        if(visible && !services->setCoatingTrajectoryPreviewVisible(true)) {
+        const bool visible = m_active && !m_session.waypoints.empty()
+            && (m_session.showTrajectory || m_session.showSprayPoints);
+        if(visible && !services->setCoatingTrajectoryPreviewVisible(
+                true,
+                m_session.showTrajectory,
+                m_session.showSprayPoints)) {
             submitTrajectoryPreview();
             return;
         }
         if(!visible) {
-            services->setCoatingTrajectoryPreviewVisible(false);
+            services->setCoatingTrajectoryPreviewVisible(
+                false,
+                m_session.showTrajectory,
+                m_session.showSprayPoints);
         }
     }
 
@@ -2725,7 +3456,7 @@ namespace robot_qt_viewer
                 // Simulation trajectories define the nozzle along local +Z;
                 // legacy imported trajectories retain the original +X axis.
                 const Eigen::Vector3d direction = rotation *
-                    (m_simulationActive ? Eigen::Vector3d::UnitZ()
+                    (simulationActive() ? Eigen::Vector3d::UnitZ()
                                          : Eigen::Vector3d::UnitX());
                 CoatingTrajectoryPreviewPoint previewPoint;
                 previewPoint.positionX = position.x();
@@ -2754,7 +3485,10 @@ namespace robot_qt_viewer
         }
         services->setCoatingTrajectoryPreview(
             previewPoints,
-            m_active && m_session.showSprayPoints && !previewPoints.empty());
+            m_active && !previewPoints.empty()
+                && (m_session.showTrajectory || m_session.showSprayPoints),
+            m_session.showTrajectory,
+            m_session.showSprayPoints);
     }
 
     void CoatingAnalysisModuleController::applyOverlayAfterReload()
@@ -2766,10 +3500,7 @@ namespace robot_qt_viewer
         }
         if(RobotQtViewerViewportServices* services = m_context.viewportServices()) {
             QString error;
-            const bool applied = m_session.predictionDisplayModel
-                ? services->applySurfaceScalarOverlayModel(
-                    m_session.overlay, *m_session.predictionDisplayModel, &error)
-                : services->applySurfaceScalarOverlay(m_session.overlay, &error);
+            const bool applied = applyCurrentSurfaceOverlay(&error);
             if(applied) {
                 services->setSurfaceScalarProbeEnabled(
                     m_session.showThickness && m_session.thicknessPickEnabled,
@@ -2780,6 +3511,65 @@ namespace robot_qt_viewer
                 refreshViewModel();
                 publishStateChanged();
             }
+        }
+    }
+
+    bool CoatingAnalysisModuleController::applyCurrentSurfaceOverlay(
+        QString* errorMessage)
+    {
+        RobotQtViewerViewportServices* services = m_context.viewportServices();
+        if(services == nullptr || !m_session.hasResult) {
+            if(errorMessage != nullptr) {
+                *errorMessage = QStringLiteral("The thickness overlay is unavailable.");
+            }
+            return false;
+        }
+
+        const bool blackOutsideRange = !m_session.showRelativeError;
+        if(m_session.predictionDisplayModel) {
+            return services->applySurfaceScalarOverlayModel(
+                m_session.overlay,
+                *m_session.predictionDisplayModel,
+                errorMessage,
+                blackOutsideRange);
+        }
+        return services->applySurfaceScalarOverlay(
+            m_session.overlay,
+            errorMessage,
+            blackOutsideRange);
+    }
+
+    void CoatingAnalysisModuleController::updateThicknessRangeAndStatistics()
+    {
+        if(!m_session.hasResult || m_session.prediction.field.empty()) {
+            m_session.uniformityStatistics = ThicknessUniformityStatistics();
+            return;
+        }
+
+        const double automaticMinimum = m_session.prediction.metrics.minThickness;
+        const double automaticMaximum = m_session.prediction.metrics.maxThickness;
+        const bool manualRangeValid = m_session.manualThicknessRange
+            && std::isfinite(m_session.minimumDisplayThicknessMeters)
+            && std::isfinite(m_session.maximumDisplayThicknessMeters)
+            && m_session.minimumDisplayThicknessMeters >= 0.0
+            && m_session.minimumDisplayThicknessMeters
+                < m_session.maximumDisplayThicknessMeters;
+        if(!manualRangeValid) {
+            m_session.manualThicknessRange = false;
+            m_session.minimumDisplayThicknessMeters = automaticMinimum;
+            m_session.maximumDisplayThicknessMeters = automaticMaximum;
+        }
+
+        m_session.thicknessOverlay.range.minimum =
+            m_session.minimumDisplayThicknessMeters;
+        m_session.thicknessOverlay.range.maximum =
+            m_session.maximumDisplayThicknessMeters;
+        m_session.uniformityStatistics = calculateThicknessUniformityStatistics(
+            m_session.prediction.field,
+            m_session.minimumDisplayThicknessMeters,
+            m_session.maximumDisplayThicknessMeters);
+        if(!m_session.showRelativeError) {
+            m_session.overlay = m_session.thicknessOverlay;
         }
     }
 
@@ -2809,7 +3599,7 @@ namespace robot_qt_viewer
         viewModel.trajectoryPath = m_session.trajectoryPath;
         viewModel.status = m_status;
         viewModel.hasResult = m_session.hasResult;
-        viewModel.predictionRunning = m_predictionJob->isRunning();
+        viewModel.predictionRunning = anyPredictionRunning();
         viewModel.localMode = m_panel.periodicLocalPredictionEnabled();
         viewModel.axisymmetricProfileMode =
             m_panel.axisymmetricProfilePredictionEnabled();
@@ -2845,6 +3635,7 @@ namespace robot_qt_viewer
         viewModel.showLocalSprayPoints = m_showLocalSprayPoints;
         viewModel.progress = m_predictionProgress;
         viewModel.showModel = m_session.showModel;
+        viewModel.showTrajectory = m_session.showTrajectory;
         viewModel.showSprayPoints = m_session.showSprayPoints;
         viewModel.showThickness = m_session.showThickness;
         viewModel.thicknessPickEnabled = m_session.thicknessPickEnabled;
@@ -2858,24 +3649,34 @@ namespace robot_qt_viewer
             ? QStringLiteral("Reference: ready (%1 active vertices)")
                   .arg(static_cast<qulonglong>(m_referenceActiveVertexCount))
             : QStringLiteral("Reference: not set");
-        viewModel.simulationActive = m_simulationActive;
-        viewModel.simulationRunning = m_simulationActive && m_predictionJob->isRunning();
-        viewModel.canRunSimulation = m_simulationActive && m_simulationReady
+        viewModel.mode = m_mode;
+        viewModel.simulationActive = simulationActive();
+        viewModel.simulationRunning = simulationActive() && m_predictionJob->isRunning();
+        viewModel.canRunSimulation = simulationActive() && m_simulationReady
             && viewModel.hasModel && !m_session.trajectory.empty();
-        viewModel.canExportSimulation = m_simulationActive && m_session.hasResult;
+        viewModel.canExportSimulation = simulationActive() && m_session.hasResult;
         viewModel.simulationDetails = m_simulationStatus;
-        if(m_simulationActive) {
+        viewModel.reproductionRunning = reproductionActive()
+            && anyPredictionRunning();
+        viewModel.canRunReproduction = reproductionActive()
+            && viewModel.hasModel && viewModel.hasTrajectory;
+        viewModel.canExportReproduction = reproductionActive()
+            && m_session.hasReproductionResult;
+        viewModel.reproductionDetails = m_reproductionStatus;
+        if(simulationActive() || reproductionActive()) {
             viewModel.canStartPrediction = false;
         }
         if(m_session.hasResult) {
             viewModel.minimumMicrometers =
                 m_session.showRelativeError
                 ? m_session.overlay.range.minimum
-                : m_session.prediction.metrics.minThickness * kMetersToMicrometers;
+                : m_session.thicknessOverlay.range.minimum
+                    * kMetersToMicrometers;
             viewModel.maximumMicrometers =
                 m_session.showRelativeError
                 ? m_session.overlay.range.maximum
-                : m_session.prediction.metrics.maxThickness * kMetersToMicrometers;
+                : m_session.thicknessOverlay.range.maximum
+                    * kMetersToMicrometers;
             viewModel.midpointMicrometers =
                 (viewModel.minimumMicrometers + viewModel.maximumMicrometers) * 0.5;
             viewModel.averageMicrometers =
@@ -2912,15 +3713,21 @@ namespace robot_qt_viewer
         infoView.hasThickness = m_session.hasResult;
         infoView.predictionElapsedSeconds = m_session.predictionElapsedSeconds;
         infoView.validationDetails = m_validationDetails;
-        infoView.simulationActive = m_simulationActive;
+        infoView.simulationActive = simulationActive();
         infoView.simulationDetails = m_simulationStatus;
         infoView.simulationThicknessVolumeCubicMillimeters =
-            m_simulationActive && m_session.hasResult
+            simulationActive() && m_session.hasResult
                 ? m_simulation.thicknessVolumeCubicMillimeters
                 : 0.0;
         if(m_session.hasResult) {
             infoView.thicknessMetrics = m_session.prediction.metrics;
             infoView.predictionTiming = m_session.prediction.timing;
+            infoView.manualThicknessRange = m_session.manualThicknessRange;
+            infoView.minimumDisplayThicknessMicrometers =
+                m_session.thicknessOverlay.range.minimum * kMetersToMicrometers;
+            infoView.maximumDisplayThicknessMicrometers =
+                m_session.thicknessOverlay.range.maximum * kMetersToMicrometers;
+            infoView.uniformityStatistics = m_session.uniformityStatistics;
         }
         m_infoPanel.applyInfo(infoView);
 
@@ -2929,6 +3736,7 @@ namespace robot_qt_viewer
         visibilityView.hasTrajectory = viewModel.hasTrajectory;
         visibilityView.hasThickness = m_session.hasResult;
         visibilityView.showModel = m_session.showModel;
+        visibilityView.showTrajectory = m_session.showTrajectory;
         visibilityView.showSprayPoints = m_session.showSprayPoints;
         visibilityView.showThickness = m_session.showThickness;
         visibilityView.thicknessPickEnabled = m_session.thicknessPickEnabled;
@@ -2938,7 +3746,8 @@ namespace robot_qt_viewer
             m_active && viewModel.hasResult,
             viewModel.minimumMicrometers,
             viewModel.maximumMicrometers,
-            m_session.showRelativeError);
+            m_session.showRelativeError,
+            !anyPredictionRunning() && !m_session.showRelativeError);
     }
 
     void CoatingAnalysisModuleController::publishStateChanged()
@@ -3035,7 +3844,7 @@ namespace robot_qt_viewer
         (void)normalX;
         (void)normalY;
         (void)normalZ;
-        if(m_predictionJob->isRunning()) {
+        if(anyPredictionRunning()) {
             return;
         }
         const simulation_project::SceneObjectDesc* object =
