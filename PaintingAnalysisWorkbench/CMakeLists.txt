@@ -14,6 +14,8 @@ set(SOURCES
     AxisymmetricProfileSelectionDialog.h
     CoatingAnalysisModuleController.cpp
     CoatingAnalysisModuleController.h
+    CoatingAnalysisWorkbenchLifecycle.cpp
+    CoatingAnalysisWorkbenchLifecycle.h
     CoatingAnalysisPanel.cpp
     CoatingAnalysisPanel.h
     CoatingAnalysisSession.h
@@ -82,6 +84,9 @@ set_target_properties(${TARGET_NAME} PROPERTIES
     FOLDER SMRobotWorkbenchPaintingAnalysis
     DEBUG_POSTFIX ${CMAKE_DEBUG_POSTFIX}
     RELEASE_POSTFIX ${CMAKE_RELEASE_POSTFIX}
+    SMROBOT_WORKBENCH_REGISTRAR_HEADER "CoatingAnalysisWorkbenchLifecycle.h"
+    SMROBOT_WORKBENCH_REGISTRAR_FUNCTION "robot_qt_viewer::registerPaintingAnalysisWorkbenchContribution"
+    EXPORT_PROPERTIES "SMROBOT_WORKBENCH_REGISTRAR_HEADER;SMROBOT_WORKBENCH_REGISTRAR_FUNCTION"
 )
 
 if(BuildTests)
