@@ -190,13 +190,29 @@ namespace robot_qt_viewer
 
         if(view.hasTrajectory) {
             const CoatingAnalysisTrajectoryInfo& info = view.trajectoryInfo;
-            m_trajectoryReadout->setText(
+            QString trajectoryText =
                 QStringLiteral("Poses      : %1\nDuration   : %2 s\n"
                                "Path length: %3 mm\nAvg speed  : %4 mm/s")
                     .arg(static_cast<qulonglong>(info.pointCount))
                     .arg(info.durationSeconds, 0, 'f', 3)
                     .arg(info.pathLengthMeters * 1000.0, 0, 'f', 2)
-                    .arg(info.averageSpeedMetersPerSecond * 1000.0, 0, 'f', 2));
+                    .arg(info.averageSpeedMetersPerSecond * 1000.0, 0, 'f', 2);
+            if(view.trajectorySamplingApplied) {
+                trajectoryText += QStringLiteral(
+                    "\nTime step:%1 s\nControl points:%2\n"
+                    "Interpolated points:%3\nTotal samples:%4\n"
+                    "Effective spray duration:%5 s")
+                    .arg(view.trajectorySamplingTimeStepSeconds, 0, 'f', 3)
+                    .arg(static_cast<qulonglong>(
+                        view.trajectoryControlPointCount))
+                    .arg(static_cast<qulonglong>(
+                        view.trajectoryInterpolatedPointCount))
+                    .arg(static_cast<qulonglong>(
+                        view.trajectorySamplePointCount))
+                    .arg(view.trajectoryEffectiveSprayDurationSeconds,
+                        0, 'f', 6);
+            }
+            m_trajectoryReadout->setText(trajectoryText);
         } else {
             m_trajectoryReadout->setText(QStringLiteral("No trajectory loaded."));
         }

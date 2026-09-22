@@ -103,6 +103,8 @@ namespace robot_qt_viewer
         void openTrajectoryFromDialog();
         void selectModelFileFromDialog();
         void selectTrajectoryFileFromDialog();
+        void handleTrajectorySamplingParametersChanged();
+        void applyTrajectorySampling();
         void predictThickness();
         void setCurrentResultAsReference();
         void clearReferenceResult();
@@ -171,6 +173,8 @@ namespace robot_qt_viewer
         void handleWaypointInfoRequested(int index);
         void handleModelVisibilityToggleRequested(const QString& objectId);
         void handleModelSetAsWorkpiece(const QString& objectId);
+        void handleModelDeleteRequested(const QString& objectId);
+        void handleTrajectoryDeleteRequested();
         void handleThicknessClearRequested();
 
         CoatingAnalysisPanel& m_panel;

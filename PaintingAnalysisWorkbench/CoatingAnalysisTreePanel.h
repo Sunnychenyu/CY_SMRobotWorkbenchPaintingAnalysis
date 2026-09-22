@@ -39,6 +39,8 @@ namespace robot_qt_viewer
         void waypointInfoRequested(int index);
         void modelVisibilityToggleRequested(const QString& objectId);
         void modelSetAsWorkpiece(const QString& objectId);
+        void modelDeleteRequested(const QString& objectId);
+        void trajectoryDeleteRequested();
         void thicknessClearRequested();
 
     private:

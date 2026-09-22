@@ -101,6 +101,8 @@ namespace robot_qt_viewer
         void axisymmetricProfileSampleCountChanged();
         void spatialGridParametersChanged();
         void depositionDirectionsChanged();
+        void trajectorySamplingParametersChanged();
+        void trajectorySamplingApplyRequested();
         void profileRegionSelectionRequested();
         void adaptiveRegionSelectionRequested();
         void localDebugVisibilityChanged(
@@ -144,6 +146,7 @@ namespace robot_qt_viewer
         QComboBox* m_trajectorySamplingCombo = nullptr;
         QWidget* m_timeStepLabel = nullptr;
         QDoubleSpinBox* m_timeStepSpinBox = nullptr;
+        QPushButton* m_applyTrajectorySamplingButton = nullptr;
         QCheckBox* m_bvhCheckBox = nullptr;
         QCheckBox* m_historyCheckBox = nullptr;
         QComboBox* m_predictionModeCombo = nullptr;

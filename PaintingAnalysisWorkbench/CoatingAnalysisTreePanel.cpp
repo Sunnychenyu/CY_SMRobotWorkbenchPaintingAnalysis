@@ -61,6 +61,17 @@ namespace robot_qt_viewer
         QMenu menu(this);
         QAction* action = nullptr;
         switch(kind) {
+        case CoatingAnalysisNodeKind::Trajectory:
+        case CoatingAnalysisNodeKind::Waypoints: {
+            if(!m_model->hasChildren(index)) {
+                return;
+            }
+            action = menu.addAction(coatingAnalysisTranslate(
+                m_languageCode, QStringLiteral("Delete Trajectory")));
+            connect(action, &QAction::triggered,
+                this, &CoatingAnalysisTreePanel::trajectoryDeleteRequested);
+            break;
+        }
         case CoatingAnalysisNodeKind::Waypoint: {
             const int waypointIndex = m_model->waypointIndex(index);
             action = menu.addAction(coatingAnalysisTranslate(
@@ -86,6 +97,12 @@ namespace robot_qt_viewer
                 m_languageCode, QStringLiteral("Show / Hide Model")));
             connect(action, &QAction::triggered, this, [this, objectId]() {
                 emit modelVisibilityToggleRequested(objectId);
+            });
+            menu.addSeparator();
+            action = menu.addAction(coatingAnalysisTranslate(
+                m_languageCode, QStringLiteral("Delete Model")));
+            connect(action, &QAction::triggered, this, [this, objectId]() {
+                emit modelDeleteRequested(objectId);
             });
             break;
         }

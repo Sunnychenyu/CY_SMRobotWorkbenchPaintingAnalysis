@@ -14,6 +14,7 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
+#include <QListView>
 #include <QProgressBar>
 #include <QPushButton>
 #include <QSignalBlocker>
@@ -561,6 +562,13 @@ namespace robot_qt_viewer
         samplingForm->setVerticalSpacing(4);
         samplingForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
         m_trajectorySamplingCombo = new QComboBox(samplingGroup);
+        auto* samplingListView = new QListView(m_trajectorySamplingCombo);
+        samplingListView->setUniformItemSizes(true);
+        samplingListView->setStyleSheet(QStringLiteral(
+            "QListView::item { min-height: 26px; padding: 4px 6px; }"));
+        m_trajectorySamplingCombo->setView(samplingListView);
+        m_trajectorySamplingCombo->setSizePolicy(
+            QSizePolicy::Ignored, QSizePolicy::Fixed);
         m_trajectorySamplingCombo->addItem(
             QStringLiteral("Original Points"),
             static_cast<int>(spraythickness::TrajectorySamplingMode::OriginalPoints));
@@ -573,8 +581,14 @@ namespace robot_qt_viewer
         m_timeStepSpinBox->setSingleStep(0.01);
         m_timeStepSpinBox->setValue(0.02);
         m_timeStepSpinBox->setSuffix(QStringLiteral(" s"));
+        m_applyTrajectorySamplingButton = new QPushButton(
+            QStringLiteral("Apply Sampling"), samplingGroup);
+        m_applyTrajectorySamplingButton->setMinimumWidth(0);
+        m_applyTrajectorySamplingButton->setSizePolicy(
+            QSizePolicy::Ignored, QSizePolicy::Fixed);
         samplingForm->addRow(QStringLiteral("Sampling"), m_trajectorySamplingCombo);
         samplingForm->addRow(QStringLiteral("Time step"), m_timeStepSpinBox);
+        samplingForm->addRow(m_applyTrajectorySamplingButton);
         m_timeStepLabel = samplingForm->labelForField(m_timeStepSpinBox);
         rootLayout->addWidget(samplingGroup);
         m_sharedSections.push_back(samplingGroup);
@@ -586,7 +600,18 @@ namespace robot_qt_viewer
             this,
             [this](int) {
                 updateTrajectorySamplingUi();
+                emit trajectorySamplingParametersChanged();
             });
+        connect(m_timeStepSpinBox,
+            QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+            this,
+            [this](double) {
+                emit trajectorySamplingParametersChanged();
+            });
+        connect(m_applyTrajectorySamplingButton,
+            &QPushButton::clicked,
+            this,
+            &CoatingAnalysisPanel::trajectorySamplingApplyRequested);
 
         // Computation options.
         auto* optionsGroup = new QGroupBox(QStringLiteral("Options"), this);
@@ -1149,6 +1174,11 @@ namespace robot_qt_viewer
             && !fixedReproductionTrajectory
             && trajectorySamplingMode()
                 == spraythickness::TrajectorySamplingMode::ResampleByTimeStep);
+        m_applyTrajectorySamplingButton->setEnabled(
+            standardControlsEnabled
+            && !fixedReproductionTrajectory
+            && viewModel.hasTrajectory
+            && viewModel.trajectorySamplingApplyRequired);
         updateTrajectorySamplingUi();
         m_algorithmCombo->setEnabled(standardControlsEnabled);
         m_sprayDirectionCombo->setEnabled(standardControlsEnabled);
@@ -1521,6 +1551,14 @@ namespace robot_qt_viewer
         }
         if(m_timeStepSpinBox != nullptr) {
             m_timeStepSpinBox->setVisible(visible);
+        }
+        if(m_applyTrajectorySamplingButton != nullptr) {
+            const bool fixedReproductionTrajectory =
+                m_mode == CoatingAnalysisMode::Reproduction
+                && reproductionForcesOriginalTrajectoryPoints();
+            m_applyTrajectorySamplingButton->setVisible(
+                visible && m_mode == CoatingAnalysisMode::Prediction
+                && !fixedReproductionTrajectory);
         }
     }
 

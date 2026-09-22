@@ -60,6 +60,15 @@ namespace robot_qt_viewer
         CoatingAnalysisTrajectoryInfo trajectoryInfo;
         spraytrajectory::SprayTrajectory trajectory;
         std::vector<spraytrajectory::SprayPathPoint> waypoints;
+        std::vector<spraytrajectory::SprayTrajectorySample> trajectoryPreviewSamples;
+        spraythickness::TrajectorySamplingMode appliedTrajectorySamplingMode{
+            spraythickness::TrajectorySamplingMode::OriginalPoints };
+        double appliedTrajectoryTimeStepSeconds = 0.02;
+        std::size_t trajectoryControlPointCount = 0;
+        std::size_t trajectoryInterpolatedPointCount = 0;
+        double trajectoryEffectiveSprayDurationSeconds = 0.0;
+        bool trajectorySamplingDirty = false;
+        bool trajectorySamplingApplied = false;
         PaintingAnalysisMeshBinding binding;
         std::shared_ptr<assetcore::ModelDesc> predictionDisplayModel;
         spraythickness::ThicknessPredictionResult prediction;
@@ -79,6 +88,19 @@ namespace robot_qt_viewer
         double minimumDisplayThicknessMeters = 0.0;
         double maximumDisplayThicknessMeters = 0.0;
         ThicknessUniformityStatistics uniformityStatistics;
+
+        void clearTrajectorySampling()
+        {
+            trajectoryPreviewSamples.clear();
+            appliedTrajectorySamplingMode =
+                spraythickness::TrajectorySamplingMode::OriginalPoints;
+            appliedTrajectoryTimeStepSeconds = 0.02;
+            trajectoryControlPointCount = 0;
+            trajectoryInterpolatedPointCount = 0;
+            trajectoryEffectiveSprayDurationSeconds = 0.0;
+            trajectorySamplingDirty = false;
+            trajectorySamplingApplied = false;
+        }
 
         void clearResult()
         {
@@ -111,6 +133,7 @@ namespace robot_qt_viewer
             trajectoryInfo = CoatingAnalysisTrajectoryInfo();
             trajectory = spraytrajectory::SprayTrajectory();
             waypoints.clear();
+            clearTrajectorySampling();
             clearResult();
             manualThicknessRange = false;
             minimumDisplayThicknessMeters = 0.0;

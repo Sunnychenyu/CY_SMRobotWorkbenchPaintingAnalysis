@@ -29,6 +29,7 @@ namespace robot_qt_viewer
         QString status = QStringLiteral("Open a mesh model to begin.");
         bool hasModel = false;
         bool hasTrajectory = false;
+        bool trajectorySamplingApplyRequired = false;
         bool hasResult = false;
         bool predictionRunning = false;
         bool localMode = false;
@@ -86,6 +87,12 @@ namespace robot_qt_viewer
         bool hasTrajectory = false;
         QString trajectoryName;
         CoatingAnalysisTrajectoryInfo trajectoryInfo;
+        bool trajectorySamplingApplied = false;
+        double trajectorySamplingTimeStepSeconds = 0.0;
+        std::size_t trajectoryControlPointCount = 0;
+        std::size_t trajectoryInterpolatedPointCount = 0;
+        std::size_t trajectorySamplePointCount = 0;
+        double trajectoryEffectiveSprayDurationSeconds = 0.0;
         bool hasThickness = false;
         double predictionElapsedSeconds = 0.0;
         spraythickness::ThicknessMetrics thicknessMetrics;

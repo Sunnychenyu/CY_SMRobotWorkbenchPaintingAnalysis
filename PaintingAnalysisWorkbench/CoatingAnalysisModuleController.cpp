@@ -37,6 +37,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QMenu>
+#include <QMessageBox>
 #include <QSettings>
 #include <QTextStream>
 
@@ -102,6 +103,18 @@ namespace
     {
         const auto samples = spraytrajectory::SprayTrajectorySampler::originalSamples(
             trajectory);
+        double duration = 0.0;
+        for(std::size_t index = 0; index + 1 < samples.size(); ++index) {
+            if(samples[index].sprayEnabled) {
+                duration += std::max(0.0, samples[index + 1].time - samples[index].time);
+            }
+        }
+        return duration;
+    }
+
+    double activeSprayDurationSeconds(
+        const std::vector<spraytrajectory::SprayTrajectorySample>& samples)
+    {
         double duration = 0.0;
         for(std::size_t index = 0; index + 1 < samples.size(); ++index) {
             if(samples[index].sprayEnabled) {
@@ -464,6 +477,11 @@ namespace robot_qt_viewer
             this, &CoatingAnalysisModuleController::selectModelFileFromDialog);
         connect(&m_panel, &CoatingAnalysisPanel::selectTrajectoryFileRequested,
             this, &CoatingAnalysisModuleController::selectTrajectoryFileFromDialog);
+        connect(&m_panel, &CoatingAnalysisPanel::trajectorySamplingParametersChanged,
+            this,
+            &CoatingAnalysisModuleController::handleTrajectorySamplingParametersChanged);
+        connect(&m_panel, &CoatingAnalysisPanel::trajectorySamplingApplyRequested,
+            this, &CoatingAnalysisModuleController::applyTrajectorySampling);
         connect(&m_panel, &CoatingAnalysisPanel::predictionRequested,
             this, &CoatingAnalysisModuleController::predictThickness);
         connect(&m_panel, &CoatingAnalysisPanel::cancelPredictionRequested,
@@ -679,6 +697,10 @@ namespace robot_qt_viewer
             this, &CoatingAnalysisModuleController::handleModelVisibilityToggleRequested);
         connect(&m_treePanel, &CoatingAnalysisTreePanel::modelSetAsWorkpiece,
             this, &CoatingAnalysisModuleController::handleModelSetAsWorkpiece);
+        connect(&m_treePanel, &CoatingAnalysisTreePanel::modelDeleteRequested,
+            this, &CoatingAnalysisModuleController::handleModelDeleteRequested);
+        connect(&m_treePanel, &CoatingAnalysisTreePanel::trajectoryDeleteRequested,
+            this, &CoatingAnalysisModuleController::handleTrajectoryDeleteRequested);
         connect(&m_treePanel, &CoatingAnalysisTreePanel::thicknessClearRequested,
             this, &CoatingAnalysisModuleController::handleThicknessClearRequested);
 
@@ -1486,6 +1508,13 @@ namespace robot_qt_viewer
         resetReferenceResult();
         m_session.trajectory = loadResult.trajectory;
         m_session.waypoints = loadResult.trajectory.flattenedPoints();
+        m_session.clearTrajectorySampling();
+        m_session.appliedTrajectoryTimeStepSeconds = m_panel.timeStepSeconds();
+        m_session.trajectoryControlPointCount = m_session.waypoints.size();
+        m_session.trajectoryEffectiveSprayDurationSeconds =
+            activeSprayDurationSeconds(m_session.trajectory);
+        m_session.trajectorySamplingDirty = m_panel.trajectorySamplingMode()
+            == spraythickness::TrajectorySamplingMode::ResampleByTimeStep;
         m_hasLocalPreview = false;
         m_localPreviewDetails.clear();
         m_session.trajectoryName = QString::fromStdString(loadResult.trajectory.name);
@@ -1501,11 +1530,120 @@ namespace robot_qt_viewer
         }
         m_hasCurrentThickness = false;
         emit thicknessToolTipRequested(QString(), QPoint(), false);
-        m_status = QStringLiteral("Trajectory loaded. Ready for GPU thickness prediction.");
+        m_status = m_session.trajectorySamplingDirty
+            ? QStringLiteral(
+                "Trajectory loaded. Click Apply Sampling to build the resampled preview.")
+            : QStringLiteral("Trajectory loaded. Ready for GPU thickness prediction.");
         refreshViewModel();
         publishStateChanged();
         emit statusMessageRequested(m_status, 3000);
         return true;
+    }
+
+    void CoatingAnalysisModuleController::handleTrajectorySamplingParametersChanged()
+    {
+        if(anyPredictionRunning() || m_mode != CoatingAnalysisMode::Prediction) {
+            return;
+        }
+
+        if(m_panel.trajectorySamplingMode()
+            == spraythickness::TrajectorySamplingMode::OriginalPoints) {
+            if(m_session.hasResult
+                && m_session.appliedTrajectorySamplingMode
+                    != spraythickness::TrajectorySamplingMode::OriginalPoints) {
+                if(RobotQtViewerViewportServices* services =
+                        m_context.viewportServices()) {
+                    services->setSurfaceScalarProbeEnabled(false, QString());
+                    services->clearSurfaceScalarOverlay(m_session.objectId);
+                }
+                m_session.clearResult();
+                m_hasCurrentThickness = false;
+                emit thicknessToolTipRequested(QString(), QPoint(), false);
+            }
+            m_session.trajectoryPreviewSamples.clear();
+            m_session.appliedTrajectorySamplingMode =
+                spraythickness::TrajectorySamplingMode::OriginalPoints;
+            m_session.appliedTrajectoryTimeStepSeconds = m_panel.timeStepSeconds();
+            m_session.trajectoryControlPointCount = m_session.waypoints.size();
+            m_session.trajectoryInterpolatedPointCount = 0;
+            m_session.trajectoryEffectiveSprayDurationSeconds =
+                activeSprayDurationSeconds(m_session.trajectory);
+            m_session.trajectorySamplingDirty = false;
+            m_session.trajectorySamplingApplied = false;
+            submitTrajectoryPreview();
+            m_status = QStringLiteral(
+                "Original trajectory points selected for prediction.");
+        } else {
+            m_session.trajectorySamplingDirty = true;
+            m_status = QStringLiteral(
+                "Sampling parameters changed. Click Apply Sampling to update the trajectory preview.");
+        }
+        refreshViewModel();
+        publishStateChanged();
+    }
+
+    void CoatingAnalysisModuleController::applyTrajectorySampling()
+    {
+        if(anyPredictionRunning() || m_session.trajectory.empty()) {
+            return;
+        }
+
+        if(m_panel.trajectorySamplingMode()
+            != spraythickness::TrajectorySamplingMode::ResampleByTimeStep) {
+            handleTrajectorySamplingParametersChanged();
+            return;
+        }
+
+        const double timeStepSeconds = m_panel.timeStepSeconds();
+        std::vector<spraytrajectory::SprayTrajectorySample> samples =
+            spraytrajectory::SprayTrajectorySampler::sample(
+                m_session.trajectory, timeStepSeconds);
+        if(samples.empty()) {
+            m_status = QStringLiteral("Failed to resample the trajectory.");
+            refreshViewModel();
+            emit statusMessageRequested(m_status, 4000);
+            return;
+        }
+
+        if(m_session.hasResult) {
+            if(RobotQtViewerViewportServices* services = m_context.viewportServices()) {
+                services->setSurfaceScalarProbeEnabled(false, QString());
+                services->clearSurfaceScalarOverlay(m_session.objectId);
+            }
+            m_session.clearResult();
+            m_hasCurrentThickness = false;
+            emit thicknessToolTipRequested(QString(), QPoint(), false);
+        }
+
+        m_session.trajectoryPreviewSamples = std::move(samples);
+        m_session.appliedTrajectorySamplingMode =
+            spraythickness::TrajectorySamplingMode::ResampleByTimeStep;
+        m_session.appliedTrajectoryTimeStepSeconds = timeStepSeconds;
+        m_session.trajectoryControlPointCount = m_session.waypoints.size();
+        m_session.trajectoryInterpolatedPointCount =
+            m_session.trajectoryPreviewSamples.size()
+                > m_session.trajectoryControlPointCount
+            ? m_session.trajectoryPreviewSamples.size()
+                - m_session.trajectoryControlPointCount
+            : 0;
+        m_session.trajectoryEffectiveSprayDurationSeconds =
+            activeSprayDurationSeconds(m_session.trajectoryPreviewSamples);
+        m_session.trajectorySamplingDirty = false;
+        m_session.trajectorySamplingApplied = true;
+        m_session.showTrajectory = true;
+        m_session.showSprayPoints = true;
+        submitTrajectoryPreview();
+        m_status = QStringLiteral(
+            "Trajectory sampling applied.\n"
+            "Control points: %1\nInterpolated points: %2\n"
+            "Total samples: %3\nEffective spray duration: %4 s")
+            .arg(static_cast<qulonglong>(m_session.trajectoryControlPointCount))
+            .arg(static_cast<qulonglong>(m_session.trajectoryInterpolatedPointCount))
+            .arg(static_cast<qulonglong>(m_session.trajectoryPreviewSamples.size()))
+            .arg(m_session.trajectoryEffectiveSprayDurationSeconds, 0, 'f', 6);
+        refreshViewModel();
+        publishStateChanged();
+        emit statusMessageRequested(m_status, 4000);
     }
 
     void CoatingAnalysisModuleController::openTrajectoryFromDialog()
@@ -1749,8 +1887,10 @@ namespace robot_qt_viewer
             task.tool.powderFeedDirectionLocal = m_panel.powderFeedDirectionLocal();
             task.process.id = spraythickness::thicknessModelId(task.model);
             task.process.name = task.process.id;
-            task.options.base.trajectorySamplingMode = m_panel.trajectorySamplingMode();
-            task.options.base.timeStep = m_panel.timeStepSeconds();
+            task.options.base.trajectorySamplingMode =
+                m_session.appliedTrajectorySamplingMode;
+            task.options.base.timeStep =
+                m_session.appliedTrajectoryTimeStepSeconds;
             task.options.enableBvhOcclusion = m_panel.bvhOcclusionEnabled();
             task.options.enableHistoryCorrection = m_panel.historyCorrectionEnabled();
             task.options.periodicLocal.enabled = m_panel.periodicLocalPredictionEnabled();
@@ -2182,6 +2322,7 @@ namespace robot_qt_viewer
             return;
         }
         m_mode = CoatingAnalysisMode::Prediction;
+        handleTrajectorySamplingParametersChanged();
         m_status = QStringLiteral("Exited algorithm reproduction mode.");
         refreshViewModel();
     }
@@ -2620,8 +2761,10 @@ namespace robot_qt_viewer
         task.tool.sprayDirectionLocal = m_panel.sprayDirectionLocal();
         task.tool.powderFeedDirectionLocal = m_panel.powderFeedDirectionLocal();
         task.process.id = spraythickness::thicknessModelId(m_panel.thicknessModel());
-        task.options.base.trajectorySamplingMode = m_panel.trajectorySamplingMode();
-        task.options.base.timeStep = m_panel.timeStepSeconds();
+        task.options.base.trajectorySamplingMode =
+            m_session.appliedTrajectorySamplingMode;
+        task.options.base.timeStep =
+            m_session.appliedTrajectoryTimeStepSeconds;
         task.options.periodicLocal.enabled = true;
         task.options.periodicLocal.axisOrigin = effectiveRotationAxisOrigin();
         task.options.periodicLocal.axisDirection = effectiveRotationAxisDirection();
@@ -3433,47 +3576,82 @@ namespace robot_qt_viewer
             return;
         }
 
-        std::size_t totalPointCount = 0;
-        for(const spraytrajectory::SpraySegment& segment : m_session.trajectory.segments) {
-            totalPointCount += segment.points.size();
-        }
         std::vector<CoatingTrajectoryPreviewPoint> previewPoints;
-        previewPoints.reserve(totalPointCount);
-        for(const spraytrajectory::SpraySegment& segment : m_session.trajectory.segments) {
-            bool startsNewSegment = true;
-            for(std::size_t pointIndex = 0; pointIndex < segment.points.size();
-                ++pointIndex) {
-                const spraytrajectory::SprayPathPoint& point = segment.points[pointIndex];
-                const Eigen::Vector3d position = point.tcpPose.translation();
-                const Eigen::Matrix3d& rotation = point.tcpPose.linear();
-                // Simulation trajectories define the nozzle along local +Z;
-                // legacy imported trajectories retain the original +X axis.
-                const Eigen::Vector3d direction = rotation *
-                    (simulationActive() ? Eigen::Vector3d::UnitZ()
-                                         : Eigen::Vector3d::UnitX());
-                CoatingTrajectoryPreviewPoint previewPoint;
-                previewPoint.positionX = position.x();
-                previewPoint.positionY = position.y();
-                previewPoint.positionZ = position.z();
-                previewPoint.directionX = direction.x();
-                previewPoint.directionY = direction.y();
-                previewPoint.directionZ = direction.z();
-                const Eigen::Vector3d frameX = rotation.col(0);
-                const Eigen::Vector3d frameY = rotation.col(1);
-                const Eigen::Vector3d frameZ = rotation.col(2);
-                previewPoint.frameXAxisX = frameX.x();
-                previewPoint.frameXAxisY = frameX.y();
-                previewPoint.frameXAxisZ = frameX.z();
-                previewPoint.frameYAxisX = frameY.x();
-                previewPoint.frameYAxisY = frameY.y();
-                previewPoint.frameYAxisZ = frameY.z();
-                previewPoint.frameZAxisX = frameZ.x();
-                previewPoint.frameZAxisY = frameZ.y();
-                previewPoint.frameZAxisZ = frameZ.z();
-                previewPoint.sprayEnabled = point.sprayEnabled && segment.sprayEnabled;
-                previewPoint.startsNewSegment = startsNewSegment;
-                previewPoints.push_back(previewPoint);
-                startsNewSegment = false;
+        const auto appendPreviewPoint = [this, &previewPoints](
+            const auto& point,
+            bool sprayEnabled,
+            bool startsNewSegment) {
+            const Eigen::Vector3d position = point.tcpPose.translation();
+            const Eigen::Matrix3d& rotation = point.tcpPose.linear();
+            // Simulation trajectories define the nozzle along local +Z;
+            // legacy imported trajectories retain the original +X axis.
+            const Eigen::Vector3d direction = rotation *
+                (simulationActive() ? Eigen::Vector3d::UnitZ()
+                                     : Eigen::Vector3d::UnitX());
+            CoatingTrajectoryPreviewPoint previewPoint;
+            previewPoint.positionX = position.x();
+            previewPoint.positionY = position.y();
+            previewPoint.positionZ = position.z();
+            previewPoint.directionX = direction.x();
+            previewPoint.directionY = direction.y();
+            previewPoint.directionZ = direction.z();
+            const Eigen::Vector3d frameX = rotation.col(0);
+            const Eigen::Vector3d frameY = rotation.col(1);
+            const Eigen::Vector3d frameZ = rotation.col(2);
+            previewPoint.frameXAxisX = frameX.x();
+            previewPoint.frameXAxisY = frameX.y();
+            previewPoint.frameXAxisZ = frameX.z();
+            previewPoint.frameYAxisX = frameY.x();
+            previewPoint.frameYAxisY = frameY.y();
+            previewPoint.frameYAxisZ = frameY.z();
+            previewPoint.frameZAxisX = frameZ.x();
+            previewPoint.frameZAxisY = frameZ.y();
+            previewPoint.frameZAxisZ = frameZ.z();
+            previewPoint.sprayEnabled = sprayEnabled;
+            previewPoint.startsNewSegment = startsNewSegment;
+            previewPoints.push_back(previewPoint);
+        };
+
+        if(m_session.trajectorySamplingApplied
+            && !m_session.trajectoryPreviewSamples.empty()) {
+            previewPoints.reserve(m_session.trajectoryPreviewSamples.size());
+            std::vector<double> segmentStartTimes;
+            segmentStartTimes.reserve(m_session.trajectory.segments.size());
+            for(const spraytrajectory::SpraySegment& segment :
+                m_session.trajectory.segments) {
+                if(!segment.points.empty()) {
+                    segmentStartTimes.push_back(segment.points.front().time);
+                }
+            }
+            std::sort(segmentStartTimes.begin(), segmentStartTimes.end());
+
+            const auto containsTime = [](const std::vector<double>& values,
+                                         double time) {
+                const auto value = std::lower_bound(values.begin(), values.end(), time);
+                const double tolerance = std::max(1.0, std::abs(time)) * 1.0e-12;
+                return (value != values.end() && std::abs(*value - time) <= tolerance)
+                    || (value != values.begin()
+                        && std::abs(*(value - 1) - time) <= tolerance);
+            };
+            for(const spraytrajectory::SprayTrajectorySample& sample :
+                m_session.trajectoryPreviewSamples) {
+                appendPreviewPoint(
+                    sample,
+                    sample.sprayEnabled,
+                    containsTime(segmentStartTimes, sample.time));
+            }
+        } else {
+            previewPoints.reserve(m_session.waypoints.size());
+            for(const spraytrajectory::SpraySegment& segment :
+                m_session.trajectory.segments) {
+                bool startsNewSegment = true;
+                for(const spraytrajectory::SprayPathPoint& point : segment.points) {
+                    appendPreviewPoint(
+                        point,
+                        point.sprayEnabled && segment.sprayEnabled,
+                        startsNewSegment);
+                    startsNewSegment = false;
+                }
             }
         }
         services->setCoatingTrajectoryPreview(
@@ -3586,6 +3764,8 @@ namespace robot_qt_viewer
             : QStringLiteral("No model loaded");
         viewModel.modelPath = m_session.sourcePath;
         viewModel.hasTrajectory = !m_session.trajectory.empty();
+        viewModel.trajectorySamplingApplyRequired =
+            m_session.trajectorySamplingDirty;
         viewModel.trajectoryName = viewModel.hasTrajectory
             ? m_session.trajectoryName
             : QStringLiteral("No trajectory loaded");
@@ -3604,6 +3784,7 @@ namespace robot_qt_viewer
             m_axisymmetricProfile->reduction.valid();
         viewModel.rotationAxisSource = rotationAxisSource();
         viewModel.canStartPrediction = viewModel.hasModel && viewModel.hasTrajectory
+            && !viewModel.trajectorySamplingApplyRequired
             && (!viewModel.localMode || viewModel.hasEffectiveRotationAxis)
             && (!viewModel.adaptiveMeshMode
                 || (viewModel.hasEffectiveRotationAxis
@@ -3615,6 +3796,7 @@ namespace robot_qt_viewer
                 || (viewModel.hasEffectiveRotationAxis
                     && viewModel.hasAxisymmetricProfileSelection));
         viewModel.canPreviewLocalInputs = viewModel.hasModel && viewModel.hasTrajectory
+            && !viewModel.trajectorySamplingApplyRequired
             && viewModel.hasEffectiveRotationAxis;
         viewModel.canSelectProfileRegion = viewModel.hasModel
             && viewModel.hasEffectiveRotationAxis
@@ -3703,6 +3885,20 @@ namespace robot_qt_viewer
         infoView.hasTrajectory = viewModel.hasTrajectory;
         infoView.trajectoryName = m_session.trajectoryName;
         infoView.trajectoryInfo = m_session.trajectoryInfo;
+        infoView.trajectorySamplingApplied =
+            m_session.trajectorySamplingApplied;
+        infoView.trajectorySamplingTimeStepSeconds =
+            m_session.appliedTrajectoryTimeStepSeconds;
+        infoView.trajectoryControlPointCount =
+            m_session.trajectoryControlPointCount;
+        infoView.trajectoryInterpolatedPointCount =
+            m_session.trajectoryInterpolatedPointCount;
+        infoView.trajectorySamplePointCount =
+            m_session.trajectorySamplingApplied
+            ? m_session.trajectoryPreviewSamples.size()
+            : m_session.waypoints.size();
+        infoView.trajectoryEffectiveSprayDurationSeconds =
+            m_session.trajectoryEffectiveSprayDurationSeconds;
         infoView.hasThickness = m_session.hasResult;
         infoView.predictionElapsedSeconds = m_session.predictionElapsedSeconds;
         infoView.validationDetails = m_validationDetails;
@@ -3801,6 +3997,121 @@ namespace robot_qt_viewer
     void CoatingAnalysisModuleController::handleModelSetAsWorkpiece(const QString& objectId)
     {
         selectWorkpiece(objectId);
+    }
+
+    void CoatingAnalysisModuleController::handleModelDeleteRequested(
+        const QString& objectId)
+    {
+        if(anyPredictionRunning()) {
+            m_status = QStringLiteral("Cannot delete a model while prediction is running.");
+            refreshViewModel();
+            emit statusMessageRequested(m_status, 3000);
+            return;
+        }
+        const simulation_project::SceneObjectDesc* object =
+            findObject(m_context.document(), objectId);
+        if(object == nullptr || object->objectType != "workpiece") {
+            m_status = QStringLiteral("The selected model is no longer available.");
+            refreshViewModel();
+            return;
+        }
+
+        const QString title = coatingAnalysisTranslate(
+            m_languageCode, QStringLiteral("Delete Model"));
+        const QString question = coatingAnalysisTranslate(
+            m_languageCode,
+            QStringLiteral("Delete this model from the current project and 3D scene?"));
+        if(QMessageBox::question(
+               &m_treePanel,
+               title,
+               question,
+               QMessageBox::Yes | QMessageBox::No,
+               QMessageBox::No) != QMessageBox::Yes) {
+            return;
+        }
+
+        const QString modelName = object->name.empty()
+            ? objectId
+            : QString::fromStdString(object->name);
+        SceneEntityWorkflowController workflow(m_context);
+        const SceneEntityDeleteResult result = workflow.deleteEntity(
+            SceneEntityKind::Object, objectId);
+        if(!result.success) {
+            m_status = result.message;
+            refreshViewModel();
+            emit statusMessageRequested(m_status, 5000);
+            return;
+        }
+
+        m_modelVisibility.remove(objectId);
+        if(RobotQtViewerViewportServices* services = m_context.viewportServices()) {
+            services->removeSceneObject(objectId);
+            services->rebuildCollisionDetectorsFromDocument(m_context.document());
+        }
+        if(m_context.selectionModel().state().objectId == objectId) {
+            m_context.selectionModel().clear(QStringLiteral("coatingAnalysisDeleteModel"));
+        }
+        ensureWorkpieceSelection();
+        m_status = QStringLiteral("Model deleted from project: %1").arg(modelName);
+        refreshViewModel();
+        publishStateChanged();
+        emit statusMessageRequested(m_status, 4000);
+    }
+
+    void CoatingAnalysisModuleController::handleTrajectoryDeleteRequested()
+    {
+        if(anyPredictionRunning()) {
+            m_status = QStringLiteral("Cannot delete the trajectory while prediction is running.");
+            refreshViewModel();
+            emit statusMessageRequested(m_status, 3000);
+            return;
+        }
+        if(m_session.trajectory.empty()) {
+            return;
+        }
+
+        const QString title = coatingAnalysisTranslate(
+            m_languageCode, QStringLiteral("Delete Trajectory"));
+        const QString question = coatingAnalysisTranslate(
+            m_languageCode,
+            QStringLiteral("Delete the loaded trajectory and its prediction result?"));
+        if(QMessageBox::question(
+               &m_treePanel,
+               title,
+               question,
+               QMessageBox::Yes | QMessageBox::No,
+               QMessageBox::No) != QMessageBox::Yes) {
+            return;
+        }
+
+        if(RobotQtViewerViewportServices* services = m_context.viewportServices()) {
+            services->setSurfaceScalarProbeEnabled(false, QString());
+            services->setCoatingTrajectoryPreview({}, false);
+            services->clearCoatingPredictionDebugState();
+            if(m_session.hasResult) {
+                services->clearSurfaceScalarOverlay(m_session.objectId);
+            }
+        }
+        m_session.trajectoryName.clear();
+        m_session.trajectoryPath.clear();
+        m_session.trajectoryInfo = CoatingAnalysisTrajectoryInfo();
+        m_session.trajectory = spraytrajectory::SprayTrajectory();
+        m_session.waypoints.clear();
+        m_session.clearTrajectorySampling();
+        m_session.clearResult();
+        resetReferenceResult();
+        m_predictionObjectId.clear();
+        m_predictionProgress = 0.0;
+        m_predictionTimerActive = false;
+        m_hasLocalPreview = false;
+        m_localPreviewDetails.clear();
+        m_treePanel.setWaypoints(nullptr);
+        m_hasCurrentThickness = false;
+        emit thicknessToolTipRequested(QString(), QPoint(), false);
+        m_status = QStringLiteral("Trajectory and dependent prediction result deleted.");
+        refreshViewModel();
+        publishStateChanged();
+        emit statusMessageRequested(m_status, 4000);
     }
 
     void CoatingAnalysisModuleController::handleThicknessClearRequested()
