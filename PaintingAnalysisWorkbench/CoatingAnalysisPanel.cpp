@@ -2,15 +2,19 @@
 
 #include "DepositionCurveWidget.h"
 #include "CoatingAnalysisLanguage.h"
+#include "PublishedReproductionAdapter.h"
 
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDoubleSpinBox>
+#include <QFileDialog>
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QLineEdit>
+#include <QListView>
 #include <QProgressBar>
 #include <QPushButton>
 #include <QSignalBlocker>
@@ -20,9 +24,57 @@
 #include <QVBoxLayout>
 #include <QAbstractButton>
 #include <QAbstractSpinBox>
+#include <QtMath>
+
+#include <cmath>
 
 namespace robot_qt_viewer
 {
+    namespace
+    {
+        enum LocalAxisId
+        {
+            PositiveX = 0,
+            NegativeX,
+            PositiveY,
+            NegativeY,
+            PositiveZ,
+            NegativeZ
+        };
+
+        Eigen::Vector3d localAxisVector(int axisId)
+        {
+            switch(axisId) {
+            case NegativeX:
+                return -Eigen::Vector3d::UnitX();
+            case PositiveY:
+                return Eigen::Vector3d::UnitY();
+            case NegativeY:
+                return -Eigen::Vector3d::UnitY();
+            case PositiveZ:
+                return Eigen::Vector3d::UnitZ();
+            case NegativeZ:
+                return -Eigen::Vector3d::UnitZ();
+            case PositiveX:
+            default:
+                return Eigen::Vector3d::UnitX();
+            }
+        }
+
+        void populateLocalAxisCombo(QComboBox& combo, int defaultAxisId)
+        {
+            combo.addItem(QStringLiteral("+X"), PositiveX);
+            combo.addItem(QStringLiteral("-X"), NegativeX);
+            combo.addItem(QStringLiteral("+Y"), PositiveY);
+            combo.addItem(QStringLiteral("-Y"), NegativeY);
+            combo.addItem(QStringLiteral("+Z"), PositiveZ);
+            combo.addItem(QStringLiteral("-Z"), NegativeZ);
+            combo.setCurrentIndex(combo.findData(defaultAxisId));
+            combo.setMinimumWidth(0);
+            combo.setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+        }
+    }
+
     CoatingAnalysisPanel::CoatingAnalysisPanel(QWidget* parent)
         : QWidget(parent)
     {
@@ -178,6 +230,208 @@ namespace robot_qt_viewer
         m_simulationKindCombo->setCurrentIndex(0);
         updateSimulationModeUi(m_simulationKindCombo->currentIndex());
 
+        m_reproductionGroup = new QGroupBox(
+            QStringLiteral("Algorithm Reproduction"), this);
+        auto* reproductionLayout = new QVBoxLayout(m_reproductionGroup);
+        reproductionLayout->setContentsMargins(8, 6, 8, 6);
+        reproductionLayout->setSpacing(4);
+        auto* reproductionForm = new QFormLayout();
+        reproductionForm->setHorizontalSpacing(6);
+        reproductionForm->setVerticalSpacing(3);
+        reproductionForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+        m_reproductionAlgorithmCombo = new QComboBox(m_reproductionGroup);
+        const auto addReproductionAlgorithm = [this](
+                                                  spraythickness::ReproductionAlgorithmKind kind) {
+            m_reproductionAlgorithmCombo->addItem(
+                QString::fromLatin1(spraythickness::reproductionAlgorithmName(kind)),
+                static_cast<int>(kind));
+        };
+        addReproductionAlgorithm(spraythickness::ReproductionAlgorithmKind::CurrentMethod);
+        addReproductionAlgorithm(spraythickness::ReproductionAlgorithmKind::Tanaka2024);
+        addReproductionAlgorithm(spraythickness::ReproductionAlgorithmKind::Tzinava2020);
+        addReproductionAlgorithm(spraythickness::ReproductionAlgorithmKind::Wu2020);
+        addReproductionAlgorithm(spraythickness::ReproductionAlgorithmKind::Fuke2005);
+        addReproductionAlgorithm(spraythickness::ReproductionAlgorithmKind::Vanerio2021);
+        addReproductionAlgorithm(
+            spraythickness::ReproductionAlgorithmKind::DynamicSurface2026);
+        m_reproductionConfigurationEdit = new QLineEdit(m_reproductionGroup);
+        m_reproductionConfigurationEdit->setReadOnly(true);
+        m_reproductionConfigurationEdit->setPlaceholderText(
+            QStringLiteral("Required paper-specific JSON calibration"));
+        m_selectReproductionConfigurationButton = new QPushButton(
+            QStringLiteral("Browse..."), m_reproductionGroup);
+        m_createReproductionTemplateButton = new QPushButton(
+            QStringLiteral("Create template..."), m_reproductionGroup);
+        auto* configurationWidget = new QWidget(m_reproductionGroup);
+        auto* configurationLayout = new QHBoxLayout(configurationWidget);
+        configurationLayout->setContentsMargins(0, 0, 0, 0);
+        configurationLayout->setSpacing(4);
+        configurationLayout->addWidget(m_reproductionConfigurationEdit, 1);
+        configurationLayout->addWidget(m_selectReproductionConfigurationButton);
+        configurationLayout->addWidget(m_createReproductionTemplateButton);
+        const auto addReproductionRow = [reproductionForm](
+                                              const QString& label,
+                                              QWidget* field) {
+            reproductionForm->addRow(label, field);
+            return reproductionForm->labelForField(field);
+        };
+        addReproductionRow(QStringLiteral("Published algorithm"),
+            m_reproductionAlgorithmCombo);
+        QWidget* configurationLabel = addReproductionRow(
+            QStringLiteral("Calibration file"), configurationWidget);
+        m_reproductionModelInputLabel = new QLabel(m_reproductionGroup);
+        m_reproductionModelInputLabel->setWordWrap(true);
+        m_reproductionTrajectoryInputLabel = new QLabel(m_reproductionGroup);
+        m_reproductionTrajectoryInputLabel->setWordWrap(true);
+        addReproductionRow(QStringLiteral("Model input"),
+            m_reproductionModelInputLabel);
+        addReproductionRow(QStringLiteral("Trajectory input"),
+            m_reproductionTrajectoryInputLabel);
+
+        m_tzinavaRotationWidget = new QWidget(m_reproductionGroup);
+        auto* rotationForm = new QFormLayout(m_tzinavaRotationWidget);
+        rotationForm->setContentsMargins(0, 0, 0, 0);
+        rotationForm->setHorizontalSpacing(4);
+        rotationForm->setVerticalSpacing(3);
+        const auto makeRotationSpin = [this](double minimum, double maximum,
+                                              double value, int decimals,
+                                              const QString& suffix) {
+            auto* spin = new QDoubleSpinBox(m_tzinavaRotationWidget);
+            spin->setRange(minimum, maximum);
+            spin->setDecimals(decimals);
+            spin->setValue(value);
+            spin->setSuffix(suffix);
+            spin->setMinimumWidth(0);
+            spin->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+            return spin;
+        };
+        m_tzinavaRotationOriginXSpinBox = makeRotationSpin(
+            -1000000.0, 1000000.0, 0.0, 3, QStringLiteral(" mm"));
+        m_tzinavaRotationOriginYSpinBox = makeRotationSpin(
+            -1000000.0, 1000000.0, 0.0, 3, QStringLiteral(" mm"));
+        m_tzinavaRotationOriginZSpinBox = makeRotationSpin(
+            -1000000.0, 1000000.0, 0.0, 3, QStringLiteral(" mm"));
+        m_tzinavaRotationAxisXSpinBox = makeRotationSpin(
+            -1.0, 1.0, 0.0, 4, QString());
+        m_tzinavaRotationAxisYSpinBox = makeRotationSpin(
+            -1.0, 1.0, 0.0, 4, QString());
+        m_tzinavaRotationAxisZSpinBox = makeRotationSpin(
+            -1.0, 1.0, 1.0, 4, QString());
+        m_tzinavaAngularSpeedSpinBox = makeRotationSpin(
+            -36000.0, 36000.0, 0.0, 3, QStringLiteral(" deg/s"));
+        const auto vectorEditor = [this](QDoubleSpinBox* x,
+                                      QDoubleSpinBox* y,
+                                      QDoubleSpinBox* z) {
+            auto* editor = new QWidget(m_tzinavaRotationWidget);
+            auto* layout = new QHBoxLayout(editor);
+            layout->setContentsMargins(0, 0, 0, 0);
+            layout->setSpacing(3);
+            layout->addWidget(x);
+            layout->addWidget(y);
+            layout->addWidget(z);
+            return editor;
+        };
+        rotationForm->addRow(QStringLiteral("Origin XYZ"),
+            vectorEditor(m_tzinavaRotationOriginXSpinBox,
+                m_tzinavaRotationOriginYSpinBox,
+                m_tzinavaRotationOriginZSpinBox));
+        rotationForm->addRow(QStringLiteral("Axis XYZ"),
+            vectorEditor(m_tzinavaRotationAxisXSpinBox,
+                m_tzinavaRotationAxisYSpinBox,
+                m_tzinavaRotationAxisZSpinBox));
+        rotationForm->addRow(QStringLiteral("Angular speed"),
+            m_tzinavaAngularSpeedSpinBox);
+        m_tzinavaRotationLabel = addReproductionRow(
+            QStringLiteral("Object rotation"), m_tzinavaRotationWidget);
+        reproductionLayout->addLayout(reproductionForm);
+        auto* reproductionButtons = new QGridLayout();
+        m_runReproductionButton = new QPushButton(
+            QStringLiteral("Run reproduction"), m_reproductionGroup);
+        m_cancelReproductionButton = new QPushButton(
+            QStringLiteral("Cancel"), m_reproductionGroup);
+        m_exportReproductionButton = new QPushButton(
+            QStringLiteral("Export result"), m_reproductionGroup);
+        reproductionButtons->addWidget(m_runReproductionButton, 0, 0, 1, 2);
+        reproductionButtons->addWidget(m_cancelReproductionButton, 1, 0);
+        reproductionButtons->addWidget(m_exportReproductionButton, 1, 1);
+        reproductionLayout->addLayout(reproductionButtons);
+        m_reproductionProgressBar = new QProgressBar(m_reproductionGroup);
+        m_reproductionProgressBar->setRange(0, 1000);
+        m_reproductionProgressBar->setTextVisible(true);
+        m_reproductionProgressBar->setVisible(false);
+        reproductionLayout->addWidget(m_reproductionProgressBar);
+        m_reproductionStatusLabel = new QLabel(
+            QStringLiteral("No reproduction result yet."), m_reproductionGroup);
+        m_reproductionStatusLabel->setWordWrap(true);
+        reproductionLayout->addWidget(m_reproductionStatusLabel);
+        m_reproductionGroup->setMinimumSize(0, 0);
+        m_reproductionGroup->setSizePolicy(
+            QSizePolicy::Ignored, QSizePolicy::Preferred);
+        rootLayout->addWidget(m_reproductionGroup);
+        connect(m_runReproductionButton, &QPushButton::clicked,
+            this, &CoatingAnalysisPanel::reproductionRequested);
+        connect(m_cancelReproductionButton, &QPushButton::clicked,
+            this, &CoatingAnalysisPanel::cancelReproductionRequested);
+        connect(m_exportReproductionButton, &QPushButton::clicked,
+            this, &CoatingAnalysisPanel::reproductionExportRequested);
+        const auto updateReproductionParameters = [this,
+                                                      configurationLabel,
+                                                      configurationWidget](int) {
+            const auto algorithm = reproductionAlgorithm();
+            const int algorithmKey = static_cast<int>(algorithm);
+            if(m_reproductionConfigurationAlgorithm >= 0) {
+                m_reproductionConfigurationPaths.insert(
+                    m_reproductionConfigurationAlgorithm,
+                    m_reproductionConfigurationEdit->text());
+            }
+            m_reproductionConfigurationEdit->setText(
+                m_reproductionConfigurationPaths.value(algorithmKey));
+            m_reproductionConfigurationAlgorithm = algorithmKey;
+            const bool current = algorithm
+                == spraythickness::ReproductionAlgorithmKind::CurrentMethod;
+            configurationLabel->setVisible(!current);
+            configurationWidget->setVisible(!current);
+            const bool configurationEnabled =
+                !m_reproductionControlsLocked && !current;
+            m_reproductionConfigurationEdit->setEnabled(configurationEnabled);
+            m_selectReproductionConfigurationButton->setEnabled(
+                configurationEnabled);
+            m_createReproductionTemplateButton->setEnabled(
+                configurationEnabled);
+            updateReproductionInputUi();
+            emit reproductionInputsChanged();
+        };
+        connect(m_reproductionAlgorithmCombo,
+            QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, updateReproductionParameters);
+        m_reproductionAlgorithmCombo->setCurrentIndex(1);
+        updateReproductionParameters(m_reproductionAlgorithmCombo->currentIndex());
+        connect(m_selectReproductionConfigurationButton,
+            &QPushButton::clicked, this, [this]() {
+                const QString path = QFileDialog::getOpenFileName(this,
+                    QStringLiteral("Select paper calibration"),
+                    m_reproductionConfigurationEdit->text(),
+                    QStringLiteral("JSON files (*.json)"));
+                if(!path.isEmpty()) {
+                    setReproductionConfigurationPath(path);
+                }
+            });
+        connect(m_createReproductionTemplateButton, &QPushButton::clicked,
+            this, &CoatingAnalysisPanel::reproductionTemplateRequested);
+        for(QDoubleSpinBox* spin : {
+            m_tzinavaRotationOriginXSpinBox,
+            m_tzinavaRotationOriginYSpinBox,
+            m_tzinavaRotationOriginZSpinBox,
+            m_tzinavaRotationAxisXSpinBox,
+            m_tzinavaRotationAxisYSpinBox,
+            m_tzinavaRotationAxisZSpinBox,
+            m_tzinavaAngularSpeedSpinBox }) {
+            connect(spin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+                this, [this](double) {
+                    emit reproductionInputsChanged();
+                });
+        }
+
         m_modeTabBar = new QTabBar(this);
         m_modeTabBar->setMinimumWidth(0);
         m_modeTabBar->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
@@ -186,6 +440,7 @@ namespace robot_qt_viewer
         m_modeTabBar->setElideMode(Qt::ElideRight);
         m_modeTabBar->addTab(QStringLiteral("Thickness Prediction"));
         m_modeTabBar->addTab(QStringLiteral("Thickness Simulation"));
+        m_modeTabBar->addTab(QStringLiteral("Algorithm Reproduction"));
         rootLayout->insertWidget(0, m_modeTabBar);
 
         // Workpiece selection.
@@ -203,7 +458,7 @@ namespace robot_qt_viewer
         m_workpieceCombo->setMinimumContentsLength(0);
         workpieceForm->addRow(QStringLiteral("Target"), m_workpieceCombo);
         rootLayout->addWidget(workpieceGroup);
-        m_predictionSections.push_back(workpieceGroup);
+        m_sharedSections.push_back(workpieceGroup);
         connect(m_workpieceCombo,
             QOverload<int>::of(&QComboBox::currentIndexChanged),
             this,
@@ -263,7 +518,7 @@ namespace robot_qt_viewer
         dataLayout->addWidget(m_selectModelButton, 2, 0);
         dataLayout->addWidget(m_selectTrajectoryButton, 2, 1);
         rootLayout->addWidget(dataGroup);
-        m_predictionSections.push_back(dataGroup);
+        m_sharedSections.push_back(dataGroup);
         connect(m_openModelButton, &QPushButton::clicked,
             this, &CoatingAnalysisPanel::openModelRequested);
         connect(m_openTrajectoryButton, &QPushButton::clicked,
@@ -288,9 +543,21 @@ namespace robot_qt_viewer
         m_algorithmCombo->addItem(
             QStringLiteral("Paper Gaussian (GPU)"),
             static_cast<int>(spraythickness::ThicknessModelKind::PaperGaussian));
+        m_sprayDirectionCombo = new QComboBox(algorithmGroup);
+        m_powderFeedDirectionCombo = new QComboBox(algorithmGroup);
+        populateLocalAxisCombo(*m_sprayDirectionCombo, PositiveZ);
+        populateLocalAxisCombo(*m_powderFeedDirectionCombo, PositiveY);
+        auto* algorithmForm = new QFormLayout();
+        algorithmForm->setHorizontalSpacing(6);
+        algorithmForm->setVerticalSpacing(4);
+        algorithmForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+        algorithmForm->addRow(QStringLiteral("Model"), m_algorithmCombo);
+        algorithmForm->addRow(QStringLiteral("Spray direction"), m_sprayDirectionCombo);
+        algorithmForm->addRow(
+            QStringLiteral("Powder feed direction"), m_powderFeedDirectionCombo);
         m_curveWidget = new DepositionCurveWidget(algorithmGroup);
         m_curveWidget->setFixedHeight(72);
-        algorithmLayout->addWidget(m_algorithmCombo);
+        algorithmLayout->addLayout(algorithmForm);
         algorithmLayout->addWidget(m_curveWidget);
         rootLayout->addWidget(algorithmGroup);
         m_predictionSections.push_back(algorithmGroup);
@@ -298,6 +565,20 @@ namespace robot_qt_viewer
             QOverload<int>::of(&QComboBox::currentIndexChanged),
             this,
             &CoatingAnalysisPanel::refreshDepositionCurve);
+        connect(m_sprayDirectionCombo,
+            QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this,
+            [this]() {
+                ensurePowderFeedDirectionValid();
+                emit depositionDirectionsChanged();
+            });
+        connect(m_powderFeedDirectionCombo,
+            QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this,
+            [this]() {
+                ensurePowderFeedDirectionValid();
+                emit depositionDirectionsChanged();
+            });
 
         // Trajectory sampling.
         auto* samplingGroup = new QGroupBox(QStringLiteral("Trajectory Sampling"), this);
@@ -307,6 +588,13 @@ namespace robot_qt_viewer
         samplingForm->setVerticalSpacing(4);
         samplingForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
         m_trajectorySamplingCombo = new QComboBox(samplingGroup);
+        auto* samplingListView = new QListView(m_trajectorySamplingCombo);
+        samplingListView->setUniformItemSizes(true);
+        samplingListView->setStyleSheet(QStringLiteral(
+            "QListView::item { min-height: 26px; padding: 4px 6px; }"));
+        m_trajectorySamplingCombo->setView(samplingListView);
+        m_trajectorySamplingCombo->setSizePolicy(
+            QSizePolicy::Ignored, QSizePolicy::Fixed);
         m_trajectorySamplingCombo->addItem(
             QStringLiteral("Original Points"),
             static_cast<int>(spraythickness::TrajectorySamplingMode::OriginalPoints));
@@ -319,18 +607,37 @@ namespace robot_qt_viewer
         m_timeStepSpinBox->setSingleStep(0.01);
         m_timeStepSpinBox->setValue(0.02);
         m_timeStepSpinBox->setSuffix(QStringLiteral(" s"));
+        m_applyTrajectorySamplingButton = new QPushButton(
+            QStringLiteral("Apply Sampling"), samplingGroup);
+        m_applyTrajectorySamplingButton->setMinimumWidth(0);
+        m_applyTrajectorySamplingButton->setSizePolicy(
+            QSizePolicy::Ignored, QSizePolicy::Fixed);
         samplingForm->addRow(QStringLiteral("Sampling"), m_trajectorySamplingCombo);
         samplingForm->addRow(QStringLiteral("Time step"), m_timeStepSpinBox);
+        samplingForm->addRow(m_applyTrajectorySamplingButton);
+        m_timeStepLabel = samplingForm->labelForField(m_timeStepSpinBox);
         rootLayout->addWidget(samplingGroup);
-        m_predictionSections.push_back(samplingGroup);
+        m_sharedSections.push_back(samplingGroup);
+        rootLayout->removeWidget(m_reproductionGroup);
+        rootLayout->insertWidget(rootLayout->indexOf(samplingGroup) + 1,
+            m_reproductionGroup);
         connect(m_trajectorySamplingCombo,
             QOverload<int>::of(&QComboBox::currentIndexChanged),
             this,
             [this](int) {
-                m_timeStepSpinBox->setEnabled(
-                    trajectorySamplingMode()
-                    == spraythickness::TrajectorySamplingMode::ResampleByTimeStep);
+                updateTrajectorySamplingUi();
+                emit trajectorySamplingParametersChanged();
             });
+        connect(m_timeStepSpinBox,
+            QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+            this,
+            [this](double) {
+                emit trajectorySamplingParametersChanged();
+            });
+        connect(m_applyTrajectorySamplingButton,
+            &QPushButton::clicked,
+            this,
+            &CoatingAnalysisPanel::trajectorySamplingApplyRequested);
 
         // Computation options.
         auto* optionsGroup = new QGroupBox(QStringLiteral("Options"), this);
@@ -397,8 +704,10 @@ namespace robot_qt_viewer
             QStringLiteral("Local candidates - full BVH"),
             QStringLiteral("Selected local vertices + candidate spray points/vertices + complete-model occlusion BVH"),
             PredictionInputMode::LocalSpatialFilteredCandidateVerticesFullBvh);
+        m_predictionModeCombo->setCurrentIndex(m_predictionModeCombo->findData(
+            static_cast<int>(PredictionInputMode::CompleteSpatialFilteredSprayPoints)));
         m_predictionModeCombo->setToolTip(
-            m_predictionModeCombo->itemData(0, Qt::ToolTipRole).toString());
+            m_predictionModeCombo->currentData(Qt::ToolTipRole).toString());
         modeLayout->addWidget(m_predictionModeCombo);
         m_spatialGridOptionsWidget = new QWidget(modeGroup);
         auto* spatialGridForm = new QFormLayout(m_spatialGridOptionsWidget);
@@ -610,6 +919,8 @@ namespace robot_qt_viewer
         m_progressBar->setRange(0, 1000);
         m_progressBar->setTextVisible(false);
         m_statusLabel = new QLabel(QStringLiteral("Load a model and trajectory to begin."), runGroup);
+        m_statusLabel->setTextFormat(Qt::PlainText);
+        m_statusLabel->setAlignment(Qt::AlignLeft | Qt::AlignTop);
         m_statusLabel->setWordWrap(true);
         runLayout->addWidget(m_predictionButton);
         runLayout->addWidget(m_cancelButton);
@@ -661,6 +972,10 @@ namespace robot_qt_viewer
             section->setMinimumSize(0, 0);
             section->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
         }
+        for(QWidget* section : m_sharedSections) {
+            section->setMinimumSize(0, 0);
+            section->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+        }
         for(QFormLayout* form : findChildren<QFormLayout*>()) {
             form->setRowWrapPolicy(QFormLayout::WrapLongRows);
             form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
@@ -669,6 +984,8 @@ namespace robot_qt_viewer
 
         refreshDepositionCurve();
         setLanguageCode(QStringLiteral("en"));
+        updateReproductionInputUi();
+        updateTrajectorySamplingUi();
     }
 
     void CoatingAnalysisPanel::setLanguageCode(const QString& languageCode)
@@ -715,36 +1032,79 @@ namespace robot_qt_viewer
             m_predictionModeCombo->setToolTip(translate(
                 m_predictionModeCombo->toolTip()));
         }
+        updateReproductionInputUi();
     }
 
     void CoatingAnalysisPanel::setModeTab(int index)
     {
-        const bool simulation = index == 1;
+        const CoatingAnalysisMode nextMode = index == 1
+            ? CoatingAnalysisMode::Simulation
+            : (index == 2 ? CoatingAnalysisMode::Reproduction
+                          : CoatingAnalysisMode::Prediction);
+        const CoatingAnalysisMode previousMode = m_mode;
+        m_mode = nextMode;
+        const bool simulation = m_mode == CoatingAnalysisMode::Simulation;
+        const bool reproduction = m_mode == CoatingAnalysisMode::Reproduction;
         m_simulationGroup->setVisible(simulation);
-        for(QWidget* section : m_predictionSections) {
+        m_reproductionGroup->setVisible(reproduction);
+        updateReproductionInputUi();
+        for(QWidget* section : m_sharedSections) {
             if(section != nullptr) {
                 section->setVisible(!simulation);
             }
         }
-        if(simulation != m_simulationActive) {
-            if(simulation) {
-                emit enterSimulationRequested();
-            } else {
-                emit exitSimulationRequested();
+        for(QWidget* section : m_predictionSections) {
+            if(section != nullptr) {
+                section->setVisible(m_mode == CoatingAnalysisMode::Prediction);
             }
+        }
+        if(previousMode == nextMode) {
+            return;
+        }
+        if(previousMode == CoatingAnalysisMode::Simulation) {
+            emit exitSimulationRequested();
+        } else if(previousMode == CoatingAnalysisMode::Reproduction) {
+            emit exitReproductionRequested();
+        }
+        if(nextMode == CoatingAnalysisMode::Simulation) {
+            emit enterSimulationRequested();
+        } else if(nextMode == CoatingAnalysisMode::Reproduction) {
+            emit enterReproductionRequested();
         }
     }
 
     void CoatingAnalysisPanel::applyViewModel(const CoatingAnalysisViewModel& viewModel)
     {
-        m_simulationActive = viewModel.simulationActive;
+        m_mode = viewModel.mode;
+        const bool simulationActive = m_mode == CoatingAnalysisMode::Simulation;
+        const bool reproductionActive = m_mode == CoatingAnalysisMode::Reproduction;
         if(m_modeTabBar != nullptr) {
             const QSignalBlocker tabBlocker(m_modeTabBar);
-            m_modeTabBar->setCurrentIndex(m_simulationActive ? 1 : 0);
-            m_simulationGroup->setVisible(m_simulationActive);
+            m_modeTabBar->setCurrentIndex(static_cast<int>(m_mode));
+            m_modeTabBar->setEnabled(!viewModel.predictionRunning);
+            m_simulationGroup->setVisible(simulationActive);
+            m_reproductionGroup->setVisible(reproductionActive);
+            updateReproductionInputUi();
+            for(QWidget* section : m_sharedSections) {
+                if(section != nullptr) {
+                    section->setVisible(!simulationActive);
+                }
+            }
             for(QWidget* section : m_predictionSections) {
                 if(section != nullptr) {
-                    section->setVisible(!m_simulationActive);
+                    // Set final visibility once. Showing a hidden local group on
+                    // every progress update temporarily reserves its height and
+                    // compresses the running status before the next layout pass.
+                    bool visible = m_mode == CoatingAnalysisMode::Prediction;
+                    if(section == m_localConfigGroup) {
+                        visible = visible && (viewModel.localMode
+                            || viewModel.axisymmetricProfileMode
+                            || viewModel.adaptiveMeshMode
+                            || viewModel.localCandidateVertexMode);
+                    } else if(section == m_validationGroup) {
+                        visible = visible && viewModel.hasModel && viewModel.hasTrajectory;
+                    }
+                    section->setVisible(visible);
                 }
             }
         }
@@ -759,10 +1119,49 @@ namespace robot_qt_viewer
             m_entrySpeedSpinBox, m_exitSpeedSpinBox, m_trajectoryPointIntervalSpinBox,
             m_scanStartXSpinBox,
             m_scanStartYSpinBox, m_scanEndXSpinBox, m_scanEndYSpinBox }) {
-            spin->setEnabled(m_simulationActive && !simulationLocked);
+            spin->setEnabled(simulationActive && !simulationLocked);
         }
-        m_scanPassCountSpinBox->setEnabled(m_simulationActive && !simulationLocked);
-        m_simulationKindCombo->setEnabled(m_simulationActive && !simulationLocked);
+        m_scanPassCountSpinBox->setEnabled(simulationActive && !simulationLocked);
+        m_simulationKindCombo->setEnabled(simulationActive && !simulationLocked);
+        const bool reproductionLocked = viewModel.predictionRunning
+            || viewModel.reproductionRunning;
+        m_reproductionControlsLocked = reproductionLocked;
+        const bool currentReproduction = reproductionAlgorithm()
+            == spraythickness::ReproductionAlgorithmKind::CurrentMethod;
+        m_reproductionAlgorithmCombo->setEnabled(!reproductionLocked);
+        m_reproductionConfigurationEdit->setEnabled(
+            !reproductionLocked && !currentReproduction);
+        m_selectReproductionConfigurationButton->setEnabled(
+            !reproductionLocked && !currentReproduction);
+        m_createReproductionTemplateButton->setEnabled(
+            !reproductionLocked && !currentReproduction);
+        for(QDoubleSpinBox* spin : {
+            m_tzinavaRotationOriginXSpinBox,
+            m_tzinavaRotationOriginYSpinBox,
+            m_tzinavaRotationOriginZSpinBox,
+            m_tzinavaRotationAxisXSpinBox,
+            m_tzinavaRotationAxisYSpinBox,
+            m_tzinavaRotationAxisZSpinBox,
+            m_tzinavaAngularSpeedSpinBox }) {
+            spin->setEnabled(!reproductionLocked);
+        }
+        const bool reproductionConfigurationReady = currentReproduction
+            || !m_reproductionConfigurationEdit->text().trimmed().isEmpty();
+        const bool reproductionRuntimeReady = reproductionAlgorithm()
+                != spraythickness::ReproductionAlgorithmKind::Tzinava2020
+            || reproductionRuntimeInputs().objectRotationAxis.squaredNorm()
+                > 1.0e-12;
+        m_runReproductionButton->setEnabled(
+            viewModel.canRunReproduction && !reproductionLocked
+            && reproductionConfigurationReady && reproductionRuntimeReady);
+        m_cancelReproductionButton->setVisible(viewModel.reproductionRunning);
+        m_reproductionProgressBar->setVisible(viewModel.reproductionRunning);
+        m_reproductionProgressBar->setValue(
+            static_cast<int>(viewModel.progress * 1000.0));
+        m_exportReproductionButton->setEnabled(
+            viewModel.canExportReproduction && !reproductionLocked);
+        m_reproductionStatusLabel->setText(coatingAnalysisTranslate(
+            m_languageCode, viewModel.reproductionDetails));
         {
             const QSignalBlocker blocker(m_workpieceCombo);
             bool itemsChanged = m_workpieceCombo->count() != viewModel.workpieces.size();
@@ -794,12 +1193,24 @@ namespace robot_qt_viewer
         m_selectTrajectoryButton->setEnabled(standardControlsEnabled);
         m_savedTrajectorySourceCombo->setEnabled(
             standardControlsEnabled && viewModel.hasModel);
-        m_trajectorySamplingCombo->setEnabled(standardControlsEnabled);
+        const bool fixedReproductionTrajectory = reproductionActive
+            && reproductionForcesOriginalTrajectoryPoints();
+        m_trajectorySamplingCombo->setEnabled(
+            standardControlsEnabled && !fixedReproductionTrajectory);
         m_timeStepSpinBox->setEnabled(
             standardControlsEnabled
+            && !fixedReproductionTrajectory
             && trajectorySamplingMode()
                 == spraythickness::TrajectorySamplingMode::ResampleByTimeStep);
+        m_applyTrajectorySamplingButton->setEnabled(
+            standardControlsEnabled
+            && !fixedReproductionTrajectory
+            && viewModel.hasTrajectory
+            && viewModel.trajectorySamplingApplyRequired);
+        updateTrajectorySamplingUi();
         m_algorithmCombo->setEnabled(standardControlsEnabled);
+        m_sprayDirectionCombo->setEnabled(standardControlsEnabled);
+        m_powderFeedDirectionCombo->setEnabled(standardControlsEnabled);
         m_bvhCheckBox->setEnabled(standardControlsEnabled);
         m_historyCheckBox->setEnabled(standardControlsEnabled);
         m_predictionModeCombo->setEnabled(
@@ -820,9 +1231,6 @@ namespace robot_qt_viewer
         m_spatialGridCellSizeSpinBox->setEnabled(
             spatialMode && !viewModel.predictionRunning
             && m_overrideSpatialGridCellSizeCheckBox->isChecked());
-        m_localConfigGroup->setVisible(
-            viewModel.localMode || viewModel.axisymmetricProfileMode
-            || viewModel.adaptiveMeshMode || viewModel.localCandidateVertexMode);
         m_rotationAxisStatusLabel->setText(coatingAnalysisTranslate(m_languageCode,
             QStringLiteral("Rotation axis: %1").arg(viewModel.rotationAxisSource)));
         m_pickRotationSurfaceButton->setEnabled(
@@ -884,7 +1292,6 @@ namespace robot_qt_viewer
         m_progressBar->setVisible(viewModel.predictionRunning);
         m_progressBar->setValue(static_cast<int>(viewModel.progress * 1000.0));
         m_statusLabel->setText(coatingAnalysisTranslate(m_languageCode, viewModel.status));
-        m_validationGroup->setVisible(viewModel.hasModel && viewModel.hasTrajectory);
         m_setReferenceButton->setVisible(true);
         m_clearReferenceButton->setVisible(true);
         m_checkReferenceButton->setVisible(true);
@@ -896,7 +1303,6 @@ namespace robot_qt_viewer
             viewModel.canCheckReference && !viewModel.predictionRunning);
         m_referenceStatusLabel->setText(
             coatingAnalysisTranslate(m_languageCode, viewModel.referenceStatus));
-        setModeTab(viewModel.simulationActive ? 1 : 0);
     }
 
     spraythickness::ThicknessModelKind CoatingAnalysisPanel::thicknessModel() const
@@ -1027,13 +1433,185 @@ namespace robot_qt_viewer
 
     bool CoatingAnalysisPanel::simulationActive() const
     {
-        return m_simulationActive;
+        return m_mode == CoatingAnalysisMode::Simulation;
+    }
+
+    CoatingAnalysisMode CoatingAnalysisPanel::mode() const
+    {
+        return m_mode;
+    }
+
+    spraythickness::ReproductionAlgorithmKind
+    CoatingAnalysisPanel::reproductionAlgorithm() const
+    {
+        return static_cast<spraythickness::ReproductionAlgorithmKind>(
+            m_reproductionAlgorithmCombo->currentData().toInt());
+    }
+
+    Eigen::Vector3d CoatingAnalysisPanel::sprayDirectionLocal() const
+    {
+        return localAxisVector(m_sprayDirectionCombo->currentData().toInt());
+    }
+
+    Eigen::Vector3d CoatingAnalysisPanel::powderFeedDirectionLocal() const
+    {
+        return localAxisVector(m_powderFeedDirectionCombo->currentData().toInt());
+    }
+
+    void CoatingAnalysisPanel::ensurePowderFeedDirectionValid()
+    {
+        if(std::abs(sprayDirectionLocal().dot(powderFeedDirectionLocal())) < 0.5) {
+            return;
+        }
+
+        const int fallbackAxis = std::abs(sprayDirectionLocal().y()) < 0.5
+            ? PositiveY : PositiveX;
+        const QSignalBlocker blocker(m_powderFeedDirectionCombo);
+        m_powderFeedDirectionCombo->setCurrentIndex(
+            m_powderFeedDirectionCombo->findData(fallbackAxis));
+    }
+
+    PublishedReproductionRuntimeInputs
+    CoatingAnalysisPanel::reproductionRuntimeInputs() const
+    {
+        PublishedReproductionRuntimeInputs inputs;
+        inputs.objectRotationOriginMeters = 0.001 * Eigen::Vector3d(
+            m_tzinavaRotationOriginXSpinBox->value(),
+            m_tzinavaRotationOriginYSpinBox->value(),
+            m_tzinavaRotationOriginZSpinBox->value());
+        inputs.objectRotationAxis = Eigen::Vector3d(
+            m_tzinavaRotationAxisXSpinBox->value(),
+            m_tzinavaRotationAxisYSpinBox->value(),
+            m_tzinavaRotationAxisZSpinBox->value());
+        inputs.objectAngularSpeedRadiansPerSecond =
+            qDegreesToRadians(m_tzinavaAngularSpeedSpinBox->value());
+        return inputs;
+    }
+
+    bool CoatingAnalysisPanel::reproductionForcesOriginalTrajectoryPoints() const
+    {
+        return PublishedReproductionAdapter::inputProfile(
+            reproductionAlgorithm()).forceOriginalTrajectoryPoints;
+    }
+
+    void CoatingAnalysisPanel::updateReproductionInputUi()
+    {
+        if(m_reproductionAlgorithmCombo == nullptr) {
+            return;
+        }
+        const PublishedReproductionInputProfile profile =
+            PublishedReproductionAdapter::inputProfile(reproductionAlgorithm());
+        const auto translate = [this](const std::string& value) {
+            return coatingAnalysisTranslate(
+                m_languageCode, QString::fromStdString(value));
+        };
+        if(m_reproductionModelInputLabel != nullptr) {
+            m_reproductionModelInputLabel->setText(
+                translate(profile.modelInputName));
+        }
+        if(m_reproductionTrajectoryInputLabel != nullptr) {
+            m_reproductionTrajectoryInputLabel->setText(
+                translate(profile.trajectoryInputName));
+        }
+        if(m_tzinavaRotationLabel != nullptr) {
+            m_tzinavaRotationLabel->setVisible(profile.hasObjectRotationInput);
+        }
+        if(m_tzinavaRotationWidget != nullptr) {
+            m_tzinavaRotationWidget->setVisible(profile.hasObjectRotationInput);
+        }
+        if(m_selectModelButton != nullptr) {
+            QString text = QStringLiteral("Select Model File");
+            if(profile.requiresStlSurface) {
+                text = QStringLiteral("Select STL Surface");
+            } else if(reproductionAlgorithm()
+                == spraythickness::ReproductionAlgorithmKind::Tanaka2024) {
+                text = QStringLiteral("Select Point Source");
+            } else if(reproductionAlgorithm()
+                == spraythickness::ReproductionAlgorithmKind::Wu2020) {
+                text = QStringLiteral("Select Substrate Model");
+            } else if(reproductionAlgorithm()
+                == spraythickness::ReproductionAlgorithmKind::Fuke2005) {
+                text = QStringLiteral("Select Surface Mesh");
+            }
+            m_selectModelButton->setText(
+                coatingAnalysisTranslate(m_languageCode, text));
+            m_selectModelButton->setToolTip(translate(profile.modelDialogTitle));
+        }
+        if(m_selectTrajectoryButton != nullptr) {
+            const QString text = reproductionAlgorithm()
+                    == spraythickness::ReproductionAlgorithmKind::Fuke2005
+                ? QStringLiteral("Select Pose Sequence")
+                : QStringLiteral("Select Trajectory File");
+            m_selectTrajectoryButton->setText(
+                coatingAnalysisTranslate(m_languageCode, text));
+            m_selectTrajectoryButton->setToolTip(
+                translate(profile.trajectoryDialogTitle));
+        }
+        const bool publishedMethod = reproductionAlgorithm()
+            != spraythickness::ReproductionAlgorithmKind::CurrentMethod;
+        if(m_openModelButton != nullptr) {
+            m_openModelButton->setVisible(!publishedMethod
+                || m_mode != CoatingAnalysisMode::Reproduction);
+        }
+        if(m_openTrajectoryButton != nullptr) {
+            m_openTrajectoryButton->setVisible(!publishedMethod
+                || m_mode != CoatingAnalysisMode::Reproduction);
+        }
+        if(profile.forceOriginalTrajectoryPoints
+            && m_trajectorySamplingCombo != nullptr) {
+            const QSignalBlocker blocker(m_trajectorySamplingCombo);
+            m_trajectorySamplingCombo->setCurrentIndex(
+                m_trajectorySamplingCombo->findData(static_cast<int>(
+                    spraythickness::TrajectorySamplingMode::OriginalPoints)));
+        }
+        updateTrajectorySamplingUi();
+    }
+
+    void CoatingAnalysisPanel::updateTrajectorySamplingUi()
+    {
+        if(m_trajectorySamplingCombo == nullptr) {
+            return;
+        }
+        const bool visible = trajectorySamplingMode()
+            == spraythickness::TrajectorySamplingMode::ResampleByTimeStep;
+        if(m_timeStepLabel != nullptr) {
+            m_timeStepLabel->setVisible(visible);
+        }
+        if(m_timeStepSpinBox != nullptr) {
+            m_timeStepSpinBox->setVisible(visible);
+        }
+        if(m_applyTrajectorySamplingButton != nullptr) {
+            const bool fixedReproductionTrajectory =
+                m_mode == CoatingAnalysisMode::Reproduction
+                && reproductionForcesOriginalTrajectoryPoints();
+            m_applyTrajectorySamplingButton->setVisible(
+                visible && m_mode == CoatingAnalysisMode::Prediction
+                && !fixedReproductionTrajectory);
+        }
+    }
+
+    QString CoatingAnalysisPanel::reproductionConfigurationPath() const
+    {
+        return m_reproductionConfigurationEdit->text();
+    }
+
+    void CoatingAnalysisPanel::setReproductionConfigurationPath(
+        const QString& path)
+    {
+        m_reproductionConfigurationEdit->setText(path);
+        const int algorithmKey = static_cast<int>(reproductionAlgorithm());
+        m_reproductionConfigurationPaths.insert(algorithmKey, path);
+        m_reproductionConfigurationAlgorithm = algorithmKey;
+        emit reproductionInputsChanged();
     }
 
     void CoatingAnalysisPanel::setPeriodicLocalPredictionEnabled(bool enabled)
     {
         if(m_predictionModeCombo != nullptr) {
-            m_predictionModeCombo->setCurrentIndex(enabled ? 1 : 0);
+            const auto mode = enabled ? PredictionInputMode::LocalAllSprayPoints
+                : PredictionInputMode::CompleteSpatialFilteredSprayPoints;
+            m_predictionModeCombo->setCurrentIndex(
+                m_predictionModeCombo->findData(static_cast<int>(mode)));
         }
     }
 

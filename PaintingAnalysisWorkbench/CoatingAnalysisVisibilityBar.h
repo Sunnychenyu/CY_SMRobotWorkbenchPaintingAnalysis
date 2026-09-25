@@ -22,12 +22,14 @@ namespace robot_qt_viewer
 
     signals:
         void showModelChanged(bool enabled);
+        void showTrajectoryChanged(bool enabled);
         void showSprayPointsChanged(bool enabled);
         void showThicknessChanged(bool enabled);
         void thicknessPickChanged(bool enabled);
 
     private:
         QCheckBox* m_showModel = nullptr;
+        QCheckBox* m_showTrajectory = nullptr;
         QCheckBox* m_showSprayPoints = nullptr;
         QCheckBox* m_showThickness = nullptr;
         QCheckBox* m_thicknessPick = nullptr;

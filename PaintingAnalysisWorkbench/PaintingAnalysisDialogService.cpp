@@ -7,13 +7,16 @@
 
 namespace robot_qt_viewer
 {
-    QString PaintingAnalysisDialogService::selectModelFile(QWidget* parent)
+    QString PaintingAnalysisDialogService::selectModelFile(
+        QWidget* parent,
+        const QString& title,
+        const QString& filter)
     {
         return QFileDialog::getOpenFileName(
             parent,
-            QStringLiteral("Open Coating Analysis Model"),
+            title,
             QString(),
-            QStringLiteral("Mesh Models (*.stl *.obj *.dae *.ply);;All Files (*.*)"));
+            filter);
     }
 
     bool PaintingAnalysisDialogService::selectModelUnitScale(
@@ -51,11 +54,13 @@ namespace robot_qt_viewer
         return false;
     }
 
-    QString PaintingAnalysisDialogService::selectTrajectoryFile(QWidget* parent)
+    QString PaintingAnalysisDialogService::selectTrajectoryFile(
+        QWidget* parent,
+        const QString& title)
     {
         return QFileDialog::getOpenFileName(
             parent,
-            QStringLiteral("Open Spray Trajectory"),
+            title,
             QString(),
             QStringLiteral("Legacy Matrix Trajectory (*.txt);;All Files (*.*)"));
     }

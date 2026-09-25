@@ -8,6 +8,7 @@ namespace robot_qt_viewer
         RobotQtViewerWorkbenchPackageRegistry& catalog)
     {
         const QString packageId = QStringLiteral("smrobot.workbench.painting-analysis");
+#if SMROBOT_PAINTING_ANALYSIS_HAS_WORKBENCH_LIFECYCLE
         if(!catalog.registerPackage(makeRobotQtViewerWorkbenchPackage(
                packageId, QStringLiteral("Painting Analysis"))) ||
             !catalog.registerWorkbench(makeRobotQtViewerWorkbench(
@@ -24,8 +25,23 @@ namespace robot_qt_viewer
             QStringLiteral("Coating Analysis"),
             packageId,
             { robotQtViewerWorkbenchId(RobotQtViewerWorkbenchKind::CoatingAnalysis) }));
+#else
+        RobotQtViewerWorkbenchPackageDesc package;
+        package.id = packageId;
+        package.displayName = QStringLiteral("Painting Analysis");
+        if(!catalog.registerPackage(package)) {
+            return false;
+        }
+
+        RobotQtViewerWorkbenchModeDesc mode;
+        mode.packageId = packageId;
+        mode.descriptor = robotQtViewerWorkbenchDescriptor(
+            RobotQtViewerWorkbenchKind::CoatingAnalysis);
+        return catalog.registerMode(mode);
+#endif
     }
 
+#if SMROBOT_PAINTING_ANALYSIS_HAS_WORKBENCH_LIFECYCLE
     CoatingAnalysisWorkbenchLifecycle::CoatingAnalysisWorkbenchLifecycle(
         CoatingAnalysisModuleController& controller)
         : m_controller(controller)
@@ -77,4 +93,5 @@ namespace robot_qt_viewer
     {
         m_controller.setLanguageCode(localization.currentLanguageId());
     }
+#endif
 }

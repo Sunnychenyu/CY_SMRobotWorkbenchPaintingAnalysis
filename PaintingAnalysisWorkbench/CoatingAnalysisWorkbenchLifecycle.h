@@ -1,13 +1,21 @@
 #pragma once
 
+#include "RobotQtViewerWorkbenchPackageRegistry.h"
+
+#if __has_include("RobotQtViewerLocalization.h") && \
+    __has_include("RobotQtViewerWorkbenchLifecycle.h")
 #include "RobotQtViewerLocalization.h"
 #include "RobotQtViewerWorkbenchLifecycle.h"
-#include "RobotQtViewerWorkbenchPackageRegistry.h"
+#define SMROBOT_PAINTING_ANALYSIS_HAS_WORKBENCH_LIFECYCLE 1
+#else
+#define SMROBOT_PAINTING_ANALYSIS_HAS_WORKBENCH_LIFECYCLE 0
+#endif
 
 namespace robot_qt_viewer
 {
     class CoatingAnalysisModuleController;
 
+#if SMROBOT_PAINTING_ANALYSIS_HAS_WORKBENCH_LIFECYCLE
     class CoatingAnalysisWorkbenchLifecycle final : public IRobotQtViewerWorkbenchLifecycle
     {
     public:
@@ -41,6 +49,7 @@ namespace robot_qt_viewer
     private:
         CoatingAnalysisModuleController& m_controller;
     };
+#endif
 
     bool registerPaintingAnalysisWorkbenchContribution(
         RobotQtViewerWorkbenchPackageRegistry& catalog);

@@ -4,7 +4,10 @@
 #include <SprayThicknessPrediction/ThicknessPrediction.h>
 
 #include <QLabel>
+#include <QRegularExpression>
 #include <QStringList>
+#include <QToolButton>
+#include <QVariant>
 #include <QVBoxLayout>
 
 namespace robot_qt_viewer
@@ -17,6 +20,13 @@ namespace robot_qt_viewer
         {
             return QStringLiteral("%1 deg").arg(radians * kRadToDeg, 0, 'g', 6);
         }
+
+        QString compactColonSpacing(QString text)
+        {
+            static const QRegularExpression spacesAroundColon(
+                QStringLiteral("[ \\t]*([:\\uFF1A])[ \\t]*"));
+            return text.replace(spacesAroundColon, QStringLiteral("\\1"));
+        }
     }
 
     CoatingAnalysisInfoPanel::CoatingAnalysisInfoPanel(QWidget* parent)
@@ -26,22 +36,20 @@ namespace robot_qt_viewer
         layout->setContentsMargins(10, 8, 10, 8);
         layout->setSpacing(4);
 
-        m_modelSection = addSection(layout, QStringLiteral("Model"));
-        m_modelReadout = addReadout(layout);
-        m_trajectorySection = addSection(layout, QStringLiteral("Trajectory"));
-        m_trajectoryReadout = addReadout(layout);
-        addSection(layout, QStringLiteral("Deposition"));
-        m_depositionReadout = addReadout(layout);
-        addSection(layout, QStringLiteral("Thermal History"));
-        m_historyReadout = addReadout(layout);
-        addSection(layout, QStringLiteral("Thickness"));
-        m_thicknessReadout = addReadout(layout);
-        addSection(layout, QStringLiteral("Computation"));
-        m_computationReadout = addReadout(layout);
-        m_validationSection = addSection(layout, QStringLiteral("Validation"));
-        m_validationReadout = addReadout(layout);
-        m_simulationSection = addSection(layout, QStringLiteral("Simulation"));
-        m_simulationReadout = addReadout(layout);
+        m_modelSection = addSection(
+            layout, QStringLiteral("Model"), m_modelReadout, m_modelContent);
+        m_trajectorySection = addSection(
+            layout, QStringLiteral("Trajectory"), m_trajectoryReadout, m_trajectoryContent);
+        QWidget* content = nullptr;
+        addSection(layout, QStringLiteral("Deposition"), m_depositionReadout, content);
+        addSection(layout, QStringLiteral("Thermal History"), m_historyReadout, content);
+        addSection(layout, QStringLiteral("Thickness"), m_thicknessReadout, content);
+        addSection(layout, QStringLiteral("Analysis"), m_analysisReadout, content);
+        addSection(layout, QStringLiteral("Computation"), m_computationReadout, content);
+        m_validationSection = addSection(
+            layout, QStringLiteral("Validation"), m_validationReadout, m_validationContent);
+        m_simulationSection = addSection(
+            layout, QStringLiteral("Simulation"), m_simulationReadout, m_simulationContent);
         layout->addStretch(1);
 
         {
@@ -87,52 +95,82 @@ namespace robot_qt_viewer
     {
         m_languageCode = languageCode.toLower().startsWith(QStringLiteral("zh"))
             ? QStringLiteral("zh-CN") : QStringLiteral("en");
+        for(QToolButton* button : findChildren<QToolButton*>()) {
+            const QString sourceTitle = button->property("sourceTitle").toString();
+            if(!sourceTitle.isEmpty()) {
+                button->setText(coatingAnalysisTranslate(m_languageCode, sourceTitle));
+            }
+        }
         for(QLabel* label : findChildren<QLabel*>()) {
-            label->setText(coatingAnalysisTranslate(m_languageCode, label->text()));
+            label->setText(compactColonSpacing(
+                coatingAnalysisTranslate(m_languageCode, label->text())));
         }
     }
 
-    QLabel* CoatingAnalysisInfoPanel::addSection(QVBoxLayout* layout, const QString& title)
+    QToolButton* CoatingAnalysisInfoPanel::addSection(
+        QVBoxLayout* layout,
+        const QString& title,
+        QLabel*& readout,
+        QWidget*& content)
     {
-        auto* label = new QLabel(title, this);
-        label->setStyleSheet(QStringLiteral("font-weight: bold;"));
-        layout->addWidget(label);
-        return label;
+        auto* button = new QToolButton(this);
+        button->setProperty("sourceTitle", title);
+        button->setText(title);
+        button->setCheckable(true);
+        button->setChecked(false);
+        button->setArrowType(Qt::RightArrow);
+        button->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+        button->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        button->setStyleSheet(QStringLiteral(
+            "QToolButton { font-weight: bold; border: none; padding: 3px 0; }"));
+        layout->addWidget(button);
+
+        content = new QWidget(this);
+        auto* contentLayout = new QVBoxLayout(content);
+        contentLayout->setContentsMargins(18, 0, 0, 4);
+        contentLayout->setSpacing(0);
+        readout = new QLabel(QStringLiteral("-"), content);
+        readout->setTextInteractionFlags(Qt::TextSelectableByMouse);
+        readout->setWordWrap(true);
+        readout->setStyleSheet(QStringLiteral("font-family: Consolas, monospace;"));
+        contentLayout->addWidget(readout);
+        content->setVisible(false);
+        layout->addWidget(content);
+
+        connect(button, &QToolButton::toggled, content, [button, content](bool expanded) {
+            button->setArrowType(expanded ? Qt::DownArrow : Qt::RightArrow);
+            content->setVisible(expanded);
+        });
+        return button;
     }
 
-    QLabel* CoatingAnalysisInfoPanel::addReadout(QVBoxLayout* layout)
+    void CoatingAnalysisInfoPanel::setSectionTitle(
+        QToolButton* section,
+        const QString& title)
     {
-        auto* label = new QLabel(QStringLiteral("-"), this);
-        label->setTextInteractionFlags(Qt::TextSelectableByMouse);
-        label->setWordWrap(true);
-        label->setStyleSheet(QStringLiteral("font-family: Consolas, monospace;"));
-        layout->addWidget(label);
-        return label;
+        if(section == nullptr) {
+            return;
+        }
+        section->setProperty("sourceTitle", title);
+        section->setText(coatingAnalysisTranslate(m_languageCode, title));
     }
 
     void CoatingAnalysisInfoPanel::applyInfo(const CoatingAnalysisInfoView& view)
     {
         const bool simulation = view.simulationActive;
-        if(m_modelSection != nullptr) {
-            m_modelSection->setText(simulation
-                ? QStringLiteral("Simulation plate")
-                : QStringLiteral("Model"));
-        }
-        if(m_trajectorySection != nullptr) {
-            m_trajectorySection->setText(simulation
-                ? QStringLiteral("Simulation trajectory")
-                : QStringLiteral("Trajectory"));
-        }
-        if(m_simulationSection != nullptr) {
-            m_simulationSection->setText(simulation
-                ? QStringLiteral("Simulation status")
-                : QStringLiteral("Simulation"));
-        }
+        setSectionTitle(m_modelSection, simulation
+            ? QStringLiteral("Simulation plate") : QStringLiteral("Model"));
+        setSectionTitle(m_trajectorySection, simulation
+            ? QStringLiteral("Simulation trajectory") : QStringLiteral("Trajectory"));
+        setSectionTitle(m_simulationSection, simulation
+            ? QStringLiteral("Simulation status") : QStringLiteral("Simulation"));
         if(m_validationSection != nullptr) {
             m_validationSection->setVisible(!simulation);
         }
-        if(m_validationReadout != nullptr) {
-            m_validationReadout->setVisible(!simulation);
+        if(m_validationContent != nullptr) {
+            m_validationContent->setVisible(
+                !simulation && m_validationSection != nullptr
+                && m_validationSection->isChecked());
         }
 
         if(view.hasModel) {
@@ -152,13 +190,29 @@ namespace robot_qt_viewer
 
         if(view.hasTrajectory) {
             const CoatingAnalysisTrajectoryInfo& info = view.trajectoryInfo;
-            m_trajectoryReadout->setText(
+            QString trajectoryText =
                 QStringLiteral("Poses      : %1\nDuration   : %2 s\n"
                                "Path length: %3 mm\nAvg speed  : %4 mm/s")
                     .arg(static_cast<qulonglong>(info.pointCount))
                     .arg(info.durationSeconds, 0, 'f', 3)
                     .arg(info.pathLengthMeters * 1000.0, 0, 'f', 2)
-                    .arg(info.averageSpeedMetersPerSecond * 1000.0, 0, 'f', 2));
+                    .arg(info.averageSpeedMetersPerSecond * 1000.0, 0, 'f', 2);
+            if(view.trajectorySamplingApplied) {
+                trajectoryText += QStringLiteral(
+                    "\nTime step:%1 s\nControl points:%2\n"
+                    "Interpolated points:%3\nTotal samples:%4\n"
+                    "Effective spray duration:%5 s")
+                    .arg(view.trajectorySamplingTimeStepSeconds, 0, 'f', 3)
+                    .arg(static_cast<qulonglong>(
+                        view.trajectoryControlPointCount))
+                    .arg(static_cast<qulonglong>(
+                        view.trajectoryInterpolatedPointCount))
+                    .arg(static_cast<qulonglong>(
+                        view.trajectorySamplePointCount))
+                    .arg(view.trajectoryEffectiveSprayDurationSeconds,
+                        0, 'f', 6);
+            }
+            m_trajectoryReadout->setText(trajectoryText);
         } else {
             m_trajectoryReadout->setText(QStringLiteral("No trajectory loaded."));
         }
@@ -273,6 +327,44 @@ namespace robot_qt_viewer
                 }
             }
             m_computationReadout->setText(lines.join(QStringLiteral("\n")));
+
+            const ThicknessUniformityStatistics& statistics =
+                view.uniformityStatistics;
+            QStringList analysisLines;
+            analysisLines
+                << QStringLiteral("Range:%1 - %2 \u03bcm (%3)")
+                       .arg(view.minimumDisplayThicknessMicrometers, 0, 'g', 8)
+                       .arg(view.maximumDisplayThicknessMicrometers, 0, 'g', 8)
+                       .arg(view.manualThicknessRange
+                           ? QStringLiteral("manual")
+                           : QStringLiteral("automatic"))
+                << QStringLiteral("Vertices:%1 / %2 (%3%)")
+                       .arg(static_cast<qulonglong>(statistics.includedVertexCount))
+                       .arg(static_cast<qulonglong>(statistics.totalVertexCount))
+                       .arg(statistics.includedRatio * 100.0, 0, 'f', 2);
+            if(statistics.valid) {
+                analysisLines
+                    << QStringLiteral("Min / Max:%1 / %2 \u03bcm")
+                           .arg(statistics.minimumThicknessMeters * 1.0e6, 0, 'g', 8)
+                           .arg(statistics.maximumThicknessMeters * 1.0e6, 0, 'g', 8)
+                    << QStringLiteral("Mean:%1 \u03bcm")
+                           .arg(statistics.meanThicknessMeters * 1.0e6, 0, 'g', 8)
+                    << QStringLiteral("Variance:%1 \u03bcm\u00b2")
+                           .arg(statistics.varianceSquareMeters * 1.0e12, 0, 'g', 8)
+                    << QStringLiteral("Std. dev.:%1 \u03bcm")
+                           .arg(statistics.standardDeviationMeters * 1.0e6, 0, 'g', 8)
+                    << QStringLiteral("CV:%1")
+                           .arg(statistics.coefficientOfVariationValid
+                               ? QStringLiteral("%1%").arg(
+                                   statistics.coefficientOfVariation * 100.0,
+                                   0,
+                                   'g',
+                                   8)
+                               : QStringLiteral("N/A"));
+            } else {
+                analysisLines << QStringLiteral("No vertices in the display range.");
+            }
+            m_analysisReadout->setText(analysisLines.join(QStringLiteral("\n")));
         } else {
             m_thicknessReadout->setText(simulation
                 ? QStringLiteral("No simulation thickness result yet.")
@@ -280,6 +372,7 @@ namespace robot_qt_viewer
             m_computationReadout->setText(simulation
                 ? QStringLiteral("Waiting for simulation...")
                 : QStringLiteral("No computation data yet."));
+            m_analysisReadout->setText(QStringLiteral("No thickness result yet."));
         }
         m_validationReadout->setText(view.validationDetails);
         m_simulationReadout->setText(view.simulationActive

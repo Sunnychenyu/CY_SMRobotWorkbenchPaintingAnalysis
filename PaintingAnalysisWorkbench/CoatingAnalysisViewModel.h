@@ -29,6 +29,7 @@ namespace robot_qt_viewer
         QString status = QStringLiteral("Open a mesh model to begin.");
         bool hasModel = false;
         bool hasTrajectory = false;
+        bool trajectorySamplingApplyRequired = false;
         bool hasResult = false;
         bool predictionRunning = false;
         bool localMode = false;
@@ -45,6 +46,7 @@ namespace robot_qt_viewer
         QString axisymmetricProfileDetails;
         QString rotationAxisSource = QStringLiteral("Not configured");
         bool showModel = true;
+        bool showTrajectory = true;
         bool showSprayPoints = true;
         bool showThickness = false;
         bool thicknessPickEnabled = false;
@@ -64,11 +66,16 @@ namespace robot_qt_viewer
         bool canClearReference = false;
         bool canCheckReference = false;
         QString referenceStatus = QStringLiteral("Reference: not set");
+        CoatingAnalysisMode mode{ CoatingAnalysisMode::Prediction };
         bool simulationActive = false;
         bool simulationRunning = false;
         bool canRunSimulation = false;
         bool canExportSimulation = false;
         QString simulationDetails;
+        bool reproductionRunning = false;
+        bool canRunReproduction = false;
+        bool canExportReproduction = false;
+        QString reproductionDetails;
     };
 
     struct CoatingAnalysisInfoView
@@ -80,10 +87,20 @@ namespace robot_qt_viewer
         bool hasTrajectory = false;
         QString trajectoryName;
         CoatingAnalysisTrajectoryInfo trajectoryInfo;
+        bool trajectorySamplingApplied = false;
+        double trajectorySamplingTimeStepSeconds = 0.0;
+        std::size_t trajectoryControlPointCount = 0;
+        std::size_t trajectoryInterpolatedPointCount = 0;
+        std::size_t trajectorySamplePointCount = 0;
+        double trajectoryEffectiveSprayDurationSeconds = 0.0;
         bool hasThickness = false;
         double predictionElapsedSeconds = 0.0;
         spraythickness::ThicknessMetrics thicknessMetrics;
         spraythickness::ThicknessPredictionTiming predictionTiming;
+        bool manualThicknessRange = false;
+        double minimumDisplayThicknessMicrometers = 0.0;
+        double maximumDisplayThicknessMicrometers = 0.0;
+        ThicknessUniformityStatistics uniformityStatistics;
         QString validationDetails = QStringLiteral("No reference result.");
         bool simulationActive = false;
         QString simulationDetails;
@@ -96,6 +113,7 @@ namespace robot_qt_viewer
         bool hasTrajectory = false;
         bool hasThickness = false;
         bool showModel = true;
+        bool showTrajectory = true;
         bool showSprayPoints = true;
         bool showThickness = false;
         bool thicknessPickEnabled = false;

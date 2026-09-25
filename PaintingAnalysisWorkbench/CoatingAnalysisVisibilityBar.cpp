@@ -20,17 +20,21 @@ namespace robot_qt_viewer
         layout->addWidget(title);
 
         m_showModel = new QCheckBox(QStringLiteral("Model"), this);
+        m_showTrajectory = new QCheckBox(QStringLiteral("Trajectory"), this);
         m_showSprayPoints = new QCheckBox(QStringLiteral("Spray Points"), this);
         m_showThickness = new QCheckBox(QStringLiteral("Thickness Cloud"), this);
         m_thicknessPick = new QCheckBox(QStringLiteral("Thickness Pick"), this);
 
         layout->addWidget(m_showModel);
+        layout->addWidget(m_showTrajectory);
         layout->addWidget(m_showSprayPoints);
         layout->addWidget(m_showThickness);
         layout->addWidget(m_thicknessPick);
         layout->addStretch(1);
 
         connect(m_showModel, &QCheckBox::toggled, this, &CoatingAnalysisVisibilityBar::showModelChanged);
+        connect(m_showTrajectory, &QCheckBox::toggled,
+            this, &CoatingAnalysisVisibilityBar::showTrajectoryChanged);
         connect(m_showSprayPoints, &QCheckBox::toggled,
             this, &CoatingAnalysisVisibilityBar::showSprayPointsChanged);
         connect(m_showThickness, &QCheckBox::toggled,
@@ -56,15 +60,18 @@ namespace robot_qt_viewer
     void CoatingAnalysisVisibilityBar::applyVisibility(const CoatingAnalysisVisibilityView& view)
     {
         m_showModel->setEnabled(view.hasModel);
+        m_showTrajectory->setEnabled(view.hasTrajectory);
         m_showSprayPoints->setEnabled(view.hasTrajectory);
         m_showThickness->setEnabled(view.hasThickness);
         m_thicknessPick->setEnabled(view.hasThickness && view.showThickness);
         {
             const QSignalBlocker modelBlocker(m_showModel);
+            const QSignalBlocker trajectoryBlocker(m_showTrajectory);
             const QSignalBlocker sprayBlocker(m_showSprayPoints);
             const QSignalBlocker thicknessBlocker(m_showThickness);
             const QSignalBlocker pickBlocker(m_thicknessPick);
             m_showModel->setChecked(view.showModel);
+            m_showTrajectory->setChecked(view.showTrajectory);
             m_showSprayPoints->setChecked(view.showSprayPoints);
             m_showThickness->setChecked(view.showThickness);
             m_thicknessPick->setChecked(view.thicknessPickEnabled);
