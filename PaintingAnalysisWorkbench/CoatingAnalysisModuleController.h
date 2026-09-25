@@ -21,6 +21,7 @@ class QMenu;
 namespace spraytrajectory
 {
     struct SprayPathPoint;
+    class SprayTrajectory;
 }
 
 namespace robot_qt_viewer
@@ -101,6 +102,24 @@ namespace robot_qt_viewer
         void openModelFromDialog();
         bool loadTrajectory(const QString& path);
         void openTrajectoryFromDialog();
+        void savedTrajectorySourceChanged();
+        bool loadSelectedSavedTrajectory(bool reportFailure);
+        bool loadSavedTrajectoryPlan(bool reportFailure);
+        bool loadOptimizationBaselineTrajectory(
+            std::size_t trajectoryCount,
+            bool reportFailure);
+        bool loadOptimizedTrajectory(
+            std::size_t trajectoryCount,
+            bool reportFailure);
+        void loadSavedTrajectoryPlanIfAvailable(bool refreshSavedTrajectory = false);
+        bool usesSavedTrajectoryPlan() const;
+        bool usesOptimizationBaselineTrajectory() const;
+        bool usesOptimizedTrajectory() const;
+        void clearLoadedTrajectory();
+        void applyLoadedTrajectory(
+            spraytrajectory::SprayTrajectory trajectory,
+            const QString& sourcePath,
+            std::size_t warningCount = 0);
         void selectModelFileFromDialog();
         void selectTrajectoryFileFromDialog();
         void handleTrajectorySamplingParametersChanged();

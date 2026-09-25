@@ -41,6 +41,15 @@ namespace robot_qt_viewer
         LocalSpatialFilteredCandidateVerticesFullBvh = 7
     };
 
+    enum class SavedTrajectorySource
+    {
+        Planning = 0,
+        DualOptimizationBaseline = 1,
+        DualOptimization = 2,
+        ThreeOptimizationBaseline = 3,
+        ThreeOptimization = 4
+    };
+
     // Right-side computation controls of the coating analysis workbench. Pure
     // input surface: selection and toggles forward to the module controller.
     // Read-out information lives in CoatingAnalysisInfoPanel, element visibility
@@ -77,6 +86,7 @@ namespace robot_qt_viewer
         std::size_t periodicSectorCount() const;
         std::size_t axisymmetricProfileSampleCount() const;
         QString selectedWorkpieceId() const;
+        SavedTrajectorySource savedTrajectorySource() const;
         SimulationExperimentParameters simulationParameters() const;
         bool simulationActive() const;
         CoatingAnalysisMode mode() const;
@@ -90,6 +100,7 @@ namespace robot_qt_viewer
         void openTrajectoryRequested();
         void selectModelFileRequested();
         void selectTrajectoryFileRequested();
+        void savedTrajectorySourceChanged();
         void predictionRequested();
         void cancelPredictionRequested();
         void setReferenceRequested();
@@ -143,6 +154,7 @@ namespace robot_qt_viewer
         QPushButton* m_openTrajectoryButton = nullptr;
         QPushButton* m_selectModelButton = nullptr;
         QPushButton* m_selectTrajectoryButton = nullptr;
+        QComboBox* m_savedTrajectorySourceCombo = nullptr;
         QComboBox* m_trajectorySamplingCombo = nullptr;
         QWidget* m_timeStepLabel = nullptr;
         QDoubleSpinBox* m_timeStepSpinBox = nullptr;
