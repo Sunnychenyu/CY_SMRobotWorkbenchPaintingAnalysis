@@ -56,6 +56,7 @@ target_link_libraries(${TARGET_NAME}
         SMRobotPlatform::VisualizationSDK
         SMRobotSpray::SprayThicknessPrediction
         SMRobotSpray::SprayTrajectoryCore
+        SMRobotSpray::RotationBodyTrajectoryPlanning
     PRIVATE
         Qt5::Gui
         Qt5::Widgets
@@ -63,6 +64,7 @@ target_link_libraries(${TARGET_NAME}
         Common::GLRuntime
         SMRobotPlatform::SimulationProject
         SMRobotSpray::SprayThicknessPredictionOpenGL
+        SMRobotSpray::RotationBodyTrajectoryOptimization
 )
 
 target_compile_features(${TARGET_NAME} PUBLIC cxx_std_17)

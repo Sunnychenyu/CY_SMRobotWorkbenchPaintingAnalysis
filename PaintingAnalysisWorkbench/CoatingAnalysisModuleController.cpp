@@ -25,6 +25,10 @@
 #include <SprayThicknessPrediction/RotationalSurfaceFitter.h>
 #include <SprayThicknessPredictionOpenGL/PeriodicSectorReduction.h>
 #include <SprayThicknessPredictionOpenGL/AxisymmetricProfileReduction.h>
+#include <RotationBodyTrajectoryPlanning/Persistence/PublishedTrajectoryPlanContract.h>
+#include <RotationBodyTrajectoryPlanning/Persistence/PublishedTrajectoryPlanSprayTrajectoryAdapter.h>
+#include <RotationBodyTrajectoryPlanning/Persistence/PublishedTrajectoryPlanStore.h>
+#include <RotationBodyTrajectoryOptimization/RotationBodyTrajectoryOptimization.h>
 #include <SimulationProject/AssetResolver.h>
 #include <SimulationProject/ProjectSession.h>
 #include <SimulationProject/RuntimePaths.h>
@@ -41,6 +45,7 @@
 #include <filesystem>
 #include <limits>
 #include <numeric>
+#include <optional>
 
 namespace
 {
@@ -48,10 +53,18 @@ namespace
     constexpr double kValidationActiveThicknessMeters = 1.0e-12;
     const QString kFixedModelPath = QStringLiteral(
         "K:/rs2026/data/ThickPredictData/STL/libing/yangjian_2_0.02.STL");
-    const QString kFixedTrajectoryPath = QStringLiteral(
-        "K:/rs2026/data/ThickPredictData/PointData/libing_pointdata/MergedTrajectory_0_0.txt");
     constexpr const char* kSimulationExportDirectorySettingsKey =
         "PaintingAnalysis/SimulationExportDirectory";
+    const QString kSavedRotationBodyTrajectoryPath =
+        QStringLiteral("project://rotation-body-trajectory-plan");
+    const QString kDualOptimizationBaselineRotationBodyTrajectoryPath =
+        QStringLiteral("project://rotation-body-dual-optimization-baseline-trajectory");
+    const QString kDualOptimizedRotationBodyTrajectoryPath =
+        QStringLiteral("project://rotation-body-dual-optimized-trajectory");
+    const QString kThreeOptimizationBaselineRotationBodyTrajectoryPath =
+        QStringLiteral("project://rotation-body-three-optimization-baseline-trajectory");
+    const QString kThreeOptimizedRotationBodyTrajectoryPath =
+        QStringLiteral("project://rotation-body-three-optimized-trajectory");
 
     double elapsedMilliseconds(const std::chrono::steady_clock::time_point& start)
     {
@@ -452,6 +465,8 @@ namespace robot_qt_viewer
             this, &CoatingAnalysisModuleController::selectModelFileFromDialog);
         connect(&m_panel, &CoatingAnalysisPanel::selectTrajectoryFileRequested,
             this, &CoatingAnalysisModuleController::selectTrajectoryFileFromDialog);
+        connect(&m_panel, &CoatingAnalysisPanel::savedTrajectorySourceChanged,
+            this, &CoatingAnalysisModuleController::savedTrajectorySourceChanged);
         connect(&m_panel, &CoatingAnalysisPanel::predictionRequested,
             this, &CoatingAnalysisModuleController::predictThickness);
         connect(&m_panel, &CoatingAnalysisPanel::cancelPredictionRequested,
@@ -997,6 +1012,7 @@ namespace robot_qt_viewer
             services->setCoatingAnalysisView(true);
         }
         ensureWorkpieceSelection();
+        loadSavedTrajectoryPlanIfAvailable();
         if(RobotQtViewerViewportServices* services = m_context.viewportServices()) {
             if(!m_session.objectId.isEmpty()) {
                 services->focusCoatingObject(m_session.objectId, 0.3);
@@ -1062,6 +1078,7 @@ namespace robot_qt_viewer
         if(event.kind == RobotQtViewerEventKind::ProjectOpened) {
             clearSession();
             ensureWorkpieceSelection();
+            loadSavedTrajectoryPlanIfAvailable();
         } else if(event.kind == RobotQtViewerEventKind::ViewportReloaded &&
             event.viewport.reloadSucceeded) {
             // The reload rebuilt the scene; re-apply the coating view mode so
@@ -1085,6 +1102,7 @@ namespace robot_qt_viewer
                 clearSession();
             }
             ensureWorkpieceSelection();
+            loadSavedTrajectoryPlanIfAvailable(true);
             refreshViewModel();
         } else if(event.kind == RobotQtViewerEventKind::SelectionChanged) {
             selectWorkpieceFromTree(event.selection.objectId);
@@ -1275,8 +1293,10 @@ namespace robot_qt_viewer
             return false;
         }
 
+        spraytrajectory::LegacySprayTrajectoryLoadOptions loadOptions;
+        loadOptions.disableSprayAcrossTransitionGaps = true;
         const spraytrajectory::LegacySprayTrajectoryLoadResult loadResult =
-            spraytrajectory::LegacySprayTrajectoryIo::loadMatrixText(sourcePath);
+            spraytrajectory::LegacySprayTrajectoryIo::loadMatrixText(sourcePath, loadOptions);
         if(!loadResult.success) {
             m_status = loadResult.warnings.empty()
                 ? QStringLiteral("Failed to load the spray trajectory.")
@@ -1286,6 +1306,234 @@ namespace robot_qt_viewer
             return false;
         }
 
+        applyLoadedTrajectory(
+            loadResult.trajectory,
+            path,
+            loadResult.warnings.size());
+        return true;
+    }
+
+    void CoatingAnalysisModuleController::openTrajectoryFromDialog()
+    {
+        loadSelectedSavedTrajectory(true);
+    }
+
+    void CoatingAnalysisModuleController::savedTrajectorySourceChanged()
+    {
+        if(m_predictionJob->isRunning()) {
+            return;
+        }
+        clearLoadedTrajectory();
+        loadSelectedSavedTrajectory(true);
+    }
+
+    bool CoatingAnalysisModuleController::loadSelectedSavedTrajectory(bool reportFailure)
+    {
+        switch(m_panel.savedTrajectorySource()) {
+        case SavedTrajectorySource::Planning:
+            return loadSavedTrajectoryPlan(reportFailure);
+        case SavedTrajectorySource::DualOptimizationBaseline:
+            return loadOptimizationBaselineTrajectory(2, reportFailure);
+        case SavedTrajectorySource::DualOptimization:
+            return loadOptimizedTrajectory(2, reportFailure);
+        case SavedTrajectorySource::ThreeOptimizationBaseline:
+            return loadOptimizationBaselineTrajectory(3, reportFailure);
+        case SavedTrajectorySource::ThreeOptimization:
+            return loadOptimizedTrajectory(3, reportFailure);
+        }
+        return false;
+    }
+
+    bool CoatingAnalysisModuleController::loadSavedTrajectoryPlan(bool reportFailure)
+    {
+        const auto fail = [this, reportFailure](const QString& message) {
+            if(reportFailure) {
+                m_status = message;
+                refreshViewModel();
+                emit statusMessageRequested(m_status, 5000);
+            }
+            return false;
+        };
+        if(m_session.objectId.isEmpty()) {
+            return fail(QStringLiteral("Select a workpiece before loading its saved trajectory."));
+        }
+
+        const simulation_project::ProjectExtensionDesc* extension = nullptr;
+        for(const simulation_project::ProjectExtensionDesc& candidate :
+            m_context.document().extensions) {
+            if(candidate.key !=
+                smrobot::spray::rotationbody::kPublishedTrajectoryPlanExtensionKey) {
+                continue;
+            }
+            if(extension != nullptr) {
+                return fail(QStringLiteral(
+                    "The project contains duplicate saved rotation-body trajectory plans."));
+            }
+            extension = &candidate;
+        }
+        if(extension == nullptr) {
+            return fail(QStringLiteral("No saved rotation-body trajectory is available for this project."));
+        }
+        if(extension->version <
+                smrobot::spray::rotationbody::kPublishedTrajectoryPlanMinimumSchemaVersion ||
+            extension->version >
+                smrobot::spray::rotationbody::kPublishedTrajectoryPlanSchemaVersion) {
+            return fail(QStringLiteral("The saved rotation-body trajectory uses an unsupported version."));
+        }
+
+        std::string parseError;
+        const std::optional<smrobot::spray::rotationbody::PublishedTrajectoryPlan> plan =
+            smrobot::spray::rotationbody::PublishedTrajectoryPlanStore::read(
+                extension->serializedPayload,
+                &parseError);
+        if(!plan.has_value() || plan->schemaVersion != extension->version) {
+            return fail(QStringLiteral("The saved rotation-body trajectory is invalid: %1")
+                .arg(QString::fromStdString(parseError)));
+        }
+        if(QString::fromStdString(plan->objectId) != m_session.objectId) {
+            return fail(QStringLiteral(
+                "The saved rotation-body trajectory belongs to a different workpiece."));
+        }
+
+        std::string conversionError;
+        const std::optional<spraytrajectory::SprayTrajectory> trajectory =
+            smrobot::spray::rotationbody::PublishedTrajectoryPlanSprayTrajectoryAdapter::convert(
+                *plan,
+                &conversionError);
+        if(!trajectory.has_value()) {
+            return fail(QStringLiteral("The saved rotation-body trajectory cannot be loaded: %1")
+                .arg(QString::fromStdString(conversionError)));
+        }
+        applyLoadedTrajectory(*trajectory, kSavedRotationBodyTrajectoryPath);
+        return true;
+    }
+
+    bool CoatingAnalysisModuleController::loadOptimizationBaselineTrajectory(
+        std::size_t trajectoryCount,
+        bool reportFailure)
+    {
+        const auto fail = [this, reportFailure](const QString& message) {
+            if(reportFailure) {
+                m_status = message;
+                refreshViewModel();
+                emit statusMessageRequested(m_status, 5000);
+            }
+            return false;
+        };
+        if(m_session.objectId.isEmpty()) {
+            return fail(QStringLiteral(
+                "Select a workpiece before loading its optimization baseline trajectory."));
+        }
+
+        const auto record = rotationbodytrajectoryoptimization::OptimizedTrajectoryMemoryStore::read(
+            m_session.objectId.toStdString(),
+            trajectoryCount == 3
+                ? rotationbodytrajectoryoptimization::TrajectoryOptimizationMode::TripleTrajectory
+                : rotationbodytrajectoryoptimization::TrajectoryOptimizationMode::DualTrajectory);
+        if(!record.has_value() || record->initialTrajectory.empty()) {
+            return fail(QStringLiteral(
+                "No %1-trajectory optimization baseline is available for this workpiece. Run that optimization mode first.")
+                .arg(static_cast<qulonglong>(trajectoryCount)));
+        }
+        const QString& sourcePath = trajectoryCount == 3
+            ? kThreeOptimizationBaselineRotationBodyTrajectoryPath
+            : kDualOptimizationBaselineRotationBodyTrajectoryPath;
+        applyLoadedTrajectory(
+            record->initialTrajectory, sourcePath);
+        return true;
+    }
+
+    bool CoatingAnalysisModuleController::loadOptimizedTrajectory(
+        std::size_t trajectoryCount,
+        bool reportFailure)
+    {
+        const auto fail = [this, reportFailure](const QString& message) {
+            if(reportFailure) {
+                m_status = message;
+                refreshViewModel();
+                emit statusMessageRequested(m_status, 5000);
+            }
+            return false;
+        };
+        if(m_session.objectId.isEmpty()) {
+            return fail(QStringLiteral("Select a workpiece before loading its optimized trajectory."));
+        }
+
+        const auto record = rotationbodytrajectoryoptimization::OptimizedTrajectoryMemoryStore::read(
+            m_session.objectId.toStdString(),
+            trajectoryCount == 3
+                ? rotationbodytrajectoryoptimization::TrajectoryOptimizationMode::TripleTrajectory
+                : rotationbodytrajectoryoptimization::TrajectoryOptimizationMode::DualTrajectory);
+        if(!record.has_value() || record->trajectory.empty()) {
+            return fail(QStringLiteral(
+                "No selected %1-trajectory optimization candidate is available for this workpiece. Run that optimization mode first.")
+                .arg(static_cast<qulonglong>(trajectoryCount)));
+        }
+        const QString& sourcePath = trajectoryCount == 3
+            ? kThreeOptimizedRotationBodyTrajectoryPath
+            : kDualOptimizedRotationBodyTrajectoryPath;
+        applyLoadedTrajectory(record->trajectory, sourcePath);
+        return true;
+    }
+
+    void CoatingAnalysisModuleController::loadSavedTrajectoryPlanIfAvailable(
+        bool refreshSavedTrajectory)
+    {
+        if(m_panel.savedTrajectorySource() != SavedTrajectorySource::Planning) {
+            return;
+        }
+        if(m_session.trajectory.empty() ||
+            (refreshSavedTrajectory && usesSavedTrajectoryPlan())) {
+            loadSavedTrajectoryPlan(false);
+        }
+    }
+
+    bool CoatingAnalysisModuleController::usesSavedTrajectoryPlan() const
+    {
+        return m_session.trajectoryPath == kSavedRotationBodyTrajectoryPath;
+    }
+
+    bool CoatingAnalysisModuleController::usesOptimizationBaselineTrajectory() const
+    {
+        return m_session.trajectoryPath == kDualOptimizationBaselineRotationBodyTrajectoryPath
+            || m_session.trajectoryPath == kThreeOptimizationBaselineRotationBodyTrajectoryPath;
+    }
+
+    bool CoatingAnalysisModuleController::usesOptimizedTrajectory() const
+    {
+        return m_session.trajectoryPath == kDualOptimizedRotationBodyTrajectoryPath
+            || m_session.trajectoryPath == kThreeOptimizedRotationBodyTrajectoryPath;
+    }
+
+    void CoatingAnalysisModuleController::clearLoadedTrajectory()
+    {
+        if(RobotQtViewerViewportServices* services = m_context.viewportServices()) {
+            services->setSurfaceScalarProbeEnabled(false, QString());
+            services->clearCoatingPredictionDebugState();
+            if(m_session.hasResult) {
+                services->clearSurfaceScalarOverlay(m_session.objectId);
+            }
+            services->setCoatingTrajectoryPreview({}, false);
+        }
+        m_session.clearResult();
+        resetReferenceResult();
+        m_session.trajectory = spraytrajectory::SprayTrajectory();
+        m_session.waypoints.clear();
+        m_session.trajectoryName.clear();
+        m_session.trajectoryPath.clear();
+        m_session.trajectoryInfo = CoatingAnalysisTrajectoryInfo();
+        m_treePanel.setWaypoints(nullptr);
+        m_hasLocalPreview = false;
+        m_localPreviewDetails.clear();
+        m_hasCurrentThickness = false;
+        emit thicknessToolTipRequested(QString(), QPoint(), false);
+    }
+
+    void CoatingAnalysisModuleController::applyLoadedTrajectory(
+        spraytrajectory::SprayTrajectory trajectory,
+        const QString& sourcePath,
+        std::size_t warningCount)
+    {
         if(RobotQtViewerViewportServices* services = m_context.viewportServices()) {
             services->setSurfaceScalarProbeEnabled(false, QString());
             services->clearCoatingPredictionDebugState();
@@ -1295,15 +1543,13 @@ namespace robot_qt_viewer
         }
         m_session.clearResult();
         resetReferenceResult();
-        m_session.trajectory = loadResult.trajectory;
-        m_session.waypoints = loadResult.trajectory.flattenedPoints();
+        m_session.trajectoryName = QString::fromStdString(trajectory.name);
+        m_session.trajectoryInfo = makeTrajectoryInfo(trajectory, warningCount);
+        m_session.waypoints = trajectory.flattenedPoints();
+        m_session.trajectory = std::move(trajectory);
+        m_session.trajectoryPath = sourcePath;
         m_hasLocalPreview = false;
         m_localPreviewDetails.clear();
-        m_session.trajectoryName = QString::fromStdString(loadResult.trajectory.name);
-        m_session.trajectoryPath = path;
-        m_session.trajectoryInfo = makeTrajectoryInfo(
-            loadResult.trajectory,
-            loadResult.warnings.size());
         m_treePanel.setWaypoints(&m_session.waypoints);
         submitTrajectoryPreview();
         if(m_panel.periodicLocalPredictionEnabled() && hasEffectiveRotationAxis()) {
@@ -1316,12 +1562,6 @@ namespace robot_qt_viewer
         refreshViewModel();
         publishStateChanged();
         emit statusMessageRequested(m_status, 3000);
-        return true;
-    }
-
-    void CoatingAnalysisModuleController::openTrajectoryFromDialog()
-    {
-        loadTrajectory(kFixedTrajectoryPath);
     }
 
     void CoatingAnalysisModuleController::selectModelFileFromDialog()
@@ -1533,13 +1773,16 @@ namespace robot_qt_viewer
             spraythickness::ThicknessPredictionTask task;
             task.model = m_panel.thicknessModel();
             task.workpiece = std::move(mesh.workpiece);
-            task.trajectory = m_session.trajectory;
             task.tool.name = "Legacy spray gun";
-            task.tool.sprayDirectionLocal = Eigen::Vector3d::UnitX();
+            task.tool.sprayDirectionLocal = Eigen::Vector3d::UnitZ();
             task.process.id = spraythickness::thicknessModelId(task.model);
             task.process.name = task.process.id;
-            task.options.base.trajectorySamplingMode = m_panel.trajectorySamplingMode();
-            task.options.base.timeStep = m_panel.timeStepSeconds();
+            const spraythickness::TrajectorySamplingMode samplingMode =
+                m_panel.trajectorySamplingMode();
+            const double timeStep = m_panel.timeStepSeconds();
+            task.trajectory = m_session.trajectory;
+            task.options.base.trajectorySamplingMode = samplingMode;
+            task.options.base.timeStep = timeStep;
             task.options.enableBvhOcclusion = m_panel.bvhOcclusionEnabled();
             task.options.enableHistoryCorrection = m_panel.historyCorrectionEnabled();
             task.options.periodicLocal.enabled = m_panel.periodicLocalPredictionEnabled();
@@ -1945,7 +2188,7 @@ namespace robot_qt_viewer
         spraythickness::ThicknessPredictionTask task;
         task.trajectory = m_session.trajectory;
         task.tool.name = "Legacy spray gun";
-        task.tool.sprayDirectionLocal = Eigen::Vector3d::UnitX();
+        task.tool.sprayDirectionLocal = Eigen::Vector3d::UnitZ();
         task.process.id = spraythickness::thicknessModelId(m_panel.thicknessModel());
         task.options.base.trajectorySamplingMode = m_panel.trajectorySamplingMode();
         task.options.base.timeStep = m_panel.timeStepSeconds();
@@ -2489,7 +2732,20 @@ namespace robot_qt_viewer
                 services->clearCoatingPredictionModel(m_session.objectId);
             }
         }
+        const bool replacingSavedTrajectory = usesSavedTrajectoryPlan() ||
+            usesOptimizationBaselineTrajectory() || usesOptimizedTrajectory();
         m_session.clearResult();
+        if(replacingSavedTrajectory) {
+            m_session.trajectory = spraytrajectory::SprayTrajectory();
+            m_session.waypoints.clear();
+            m_session.trajectoryName.clear();
+            m_session.trajectoryPath.clear();
+            m_session.trajectoryInfo = CoatingAnalysisTrajectoryInfo();
+            m_treePanel.setWaypoints(nullptr);
+            if(RobotQtViewerViewportServices* services = m_context.viewportServices()) {
+                services->setCoatingTrajectoryPreview({}, false);
+            }
+        }
         resetReferenceResult();
         m_session.objectId = objectId;
         m_session.modelName = QString::fromStdString(object->name);
@@ -2521,6 +2777,7 @@ namespace robot_qt_viewer
         }
         m_status = QStringLiteral("Prediction workpiece selected: %1")
             .arg(m_session.modelName);
+        loadSavedTrajectoryPlanIfAvailable();
         refreshViewModel();
         publishStateChanged();
     }
@@ -2715,11 +2972,9 @@ namespace robot_qt_viewer
                 const spraytrajectory::SprayPathPoint& point = segment.points[pointIndex];
                 const Eigen::Vector3d position = point.tcpPose.translation();
                 const Eigen::Matrix3d& rotation = point.tcpPose.linear();
-                // Simulation trajectories define the nozzle along local +Z;
-                // legacy imported trajectories retain the original +X axis.
-                const Eigen::Vector3d direction = rotation *
-                    (m_simulationActive ? Eigen::Vector3d::UnitZ()
-                                         : Eigen::Vector3d::UnitX());
+                // Coating trajectories define the nozzle along matrix local +Z,
+                // including legacy TXT imports.
+                const Eigen::Vector3d direction = rotation * Eigen::Vector3d::UnitZ();
                 CoatingTrajectoryPreviewPoint previewPoint;
                 previewPoint.positionX = position.x();
                 previewPoint.positionY = position.y();

@@ -220,15 +220,33 @@ namespace robot_qt_viewer
         dataLayout->setContentsMargins(8, 6, 8, 6);
         dataLayout->setSpacing(6);
         m_openModelButton = new QPushButton(QStringLiteral("Debug Model"), dataGroup);
-        m_openTrajectoryButton = new QPushButton(QStringLiteral("Debug Trajectory"), dataGroup);
+        m_openTrajectoryButton = new QPushButton(QStringLiteral("Load Selected Trajectory"), dataGroup);
         m_selectModelButton = new QPushButton(QStringLiteral("Select Model File"), dataGroup);
         m_selectTrajectoryButton = new QPushButton(QStringLiteral("Select Trajectory File"), dataGroup);
+        m_savedTrajectorySourceCombo = new QComboBox(dataGroup);
+        m_savedTrajectorySourceCombo->addItem(
+            QStringLiteral("Trajectory planning"),
+            static_cast<int>(SavedTrajectorySource::Planning));
+        m_savedTrajectorySourceCombo->addItem(
+            QStringLiteral("Dual-trajectory optimization baseline (with passes)"),
+            static_cast<int>(SavedTrajectorySource::DualOptimizationBaseline));
+        m_savedTrajectorySourceCombo->addItem(
+            QStringLiteral("Dual-trajectory selected candidate (with passes)"),
+            static_cast<int>(SavedTrajectorySource::DualOptimization));
+        m_savedTrajectorySourceCombo->addItem(
+            QStringLiteral("Three-trajectory optimization baseline (with passes)"),
+            static_cast<int>(SavedTrajectorySource::ThreeOptimizationBaseline));
+        m_savedTrajectorySourceCombo->addItem(
+            QStringLiteral("Three-trajectory selected candidate (with passes)"),
+            static_cast<int>(SavedTrajectorySource::ThreeOptimization));
         m_openModelButton->setToolTip(
             QStringLiteral("Load the configured debug workpiece model."));
         m_openTrajectoryButton->setToolTip(
-            QStringLiteral("Load the configured debug spray trajectory."));
+            QStringLiteral("Load the selected planned trajectory or the selected dual/three-trajectory optimization data for the workpiece."));
         m_selectModelButton->setToolTip(QStringLiteral("Choose a workpiece model file."));
         m_selectTrajectoryButton->setToolTip(QStringLiteral("Choose a spray trajectory file."));
+        m_savedTrajectorySourceCombo->setToolTip(
+            QStringLiteral("Choose a dual/three-trajectory optimization baseline or its currently selected niche candidate, all with enumerated passes."));
         m_openModelButton->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
         m_openTrajectoryButton->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
         m_selectModelButton->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
@@ -238,10 +256,12 @@ namespace robot_qt_viewer
             button->setMinimumWidth(0);
             button->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
         }
-        dataLayout->addWidget(m_openModelButton, 0, 0);
-        dataLayout->addWidget(m_openTrajectoryButton, 0, 1);
-        dataLayout->addWidget(m_selectModelButton, 1, 0);
-        dataLayout->addWidget(m_selectTrajectoryButton, 1, 1);
+        dataLayout->addWidget(new QLabel(QStringLiteral("Saved trajectory source"), dataGroup), 0, 0);
+        dataLayout->addWidget(m_savedTrajectorySourceCombo, 0, 1);
+        dataLayout->addWidget(m_openModelButton, 1, 0);
+        dataLayout->addWidget(m_openTrajectoryButton, 1, 1);
+        dataLayout->addWidget(m_selectModelButton, 2, 0);
+        dataLayout->addWidget(m_selectTrajectoryButton, 2, 1);
         rootLayout->addWidget(dataGroup);
         m_predictionSections.push_back(dataGroup);
         connect(m_openModelButton, &QPushButton::clicked,
@@ -252,6 +272,12 @@ namespace robot_qt_viewer
             this, &CoatingAnalysisPanel::selectModelFileRequested);
         connect(m_selectTrajectoryButton, &QPushButton::clicked,
             this, &CoatingAnalysisPanel::selectTrajectoryFileRequested);
+        connect(m_savedTrajectorySourceCombo,
+            QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this,
+            [this](int) {
+                emit savedTrajectorySourceChanged();
+            });
 
         // Deposition algorithm + curve preview.
         auto* algorithmGroup = new QGroupBox(QStringLiteral("Deposition Model"), this);
@@ -766,6 +792,8 @@ namespace robot_qt_viewer
         m_openTrajectoryButton->setEnabled(standardControlsEnabled);
         m_selectModelButton->setEnabled(standardControlsEnabled);
         m_selectTrajectoryButton->setEnabled(standardControlsEnabled);
+        m_savedTrajectorySourceCombo->setEnabled(
+            standardControlsEnabled && viewModel.hasModel);
         m_trajectorySamplingCombo->setEnabled(standardControlsEnabled);
         m_timeStepSpinBox->setEnabled(
             standardControlsEnabled
@@ -1029,6 +1057,12 @@ namespace robot_qt_viewer
     QString CoatingAnalysisPanel::selectedWorkpieceId() const
     {
         return m_workpieceCombo->currentData().toString();
+    }
+
+    SavedTrajectorySource CoatingAnalysisPanel::savedTrajectorySource() const
+    {
+        return static_cast<SavedTrajectorySource>(
+            m_savedTrajectorySourceCombo->currentData().toInt());
     }
 
     void CoatingAnalysisPanel::refreshDepositionCurve()
