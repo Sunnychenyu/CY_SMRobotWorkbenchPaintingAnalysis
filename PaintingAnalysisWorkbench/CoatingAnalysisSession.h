@@ -20,7 +20,8 @@ namespace robot_qt_viewer
     {
         Prediction = 0,
         Simulation = 1,
-        Reproduction = 2
+        Reproduction = 2,
+        Online = 3
     };
 
     struct CoatingAnalysisModelInfo

@@ -76,10 +76,15 @@ namespace robot_qt_viewer
         explicit CoatingAnalysisPanel(QWidget* parent = nullptr);
         void applyViewModel(const CoatingAnalysisViewModel& viewModel);
         void setLanguageCode(const QString& languageCode);
+        void setOnlinePredictionState(bool active, bool spraying, const QString& status);
 
         spraythickness::ThicknessModelKind thicknessModel() const;
         Eigen::Vector3d sprayDirectionLocal() const;
         Eigen::Vector3d powderFeedDirectionLocal() const;
+        Eigen::Vector3d onlineSprayDirectionLocal() const;
+        Eigen::Vector3d onlinePowderFeedDirectionLocal() const;
+        bool onlineBvhOcclusionEnabled() const;
+        bool onlineHistoryCorrectionEnabled() const;
         spraythickness::TrajectorySamplingMode trajectorySamplingMode() const;
         double timeStepSeconds() const;
         bool bvhOcclusionEnabled() const;
@@ -125,6 +130,8 @@ namespace robot_qt_viewer
         void selectTrajectoryFileRequested();
         void savedTrajectorySourceChanged();
         void predictionRequested();
+        void onlineSprayStartRequested();
+        void onlineSprayStopRequested();
         void cancelPredictionRequested();
         void setReferenceRequested();
         void clearReferenceRequested();
@@ -153,6 +160,8 @@ namespace robot_qt_viewer
         void simulationExportRequested();
         void enterReproductionRequested();
         void exitReproductionRequested();
+        void enterOnlineRequested();
+        void exitOnlineRequested();
         void reproductionRequested();
         void reproductionBenchmarkRequested();
         void reproductionInputsChanged();
@@ -181,6 +190,16 @@ namespace robot_qt_viewer
 
         QComboBox* m_workpieceCombo = nullptr;
         QComboBox* m_algorithmCombo = nullptr;
+        QComboBox* m_onlineAlgorithmCombo = nullptr;
+        QComboBox* m_onlineSprayDirectionCombo = nullptr;
+        QComboBox* m_onlinePowderFeedDirectionCombo = nullptr;
+        QCheckBox* m_onlineBvhCheckBox = nullptr;
+        QCheckBox* m_onlineHistoryCheckBox = nullptr;
+        QPushButton* m_onlineStartButton = nullptr;
+        QPushButton* m_onlineStopButton = nullptr;
+        QLabel* m_onlineStatusLabel = nullptr;
+        bool m_onlineActive = false;
+        bool m_onlineSpraying = false;
         QComboBox* m_sprayDirectionCombo = nullptr;
         QComboBox* m_powderFeedDirectionCombo = nullptr;
         DepositionCurveWidget* m_curveWidget = nullptr;
@@ -309,8 +328,10 @@ namespace robot_qt_viewer
         bool m_reproductionControlsLocked = false;
         CoatingAnalysisMode m_mode{ CoatingAnalysisMode::Prediction };
         QTabBar* m_modeTabBar = nullptr;
+        QGroupBox* m_workpieceGroup = nullptr;
         QVector<QWidget*> m_sharedSections;
         QVector<QWidget*> m_predictionSections;
+        QVector<QWidget*> m_onlineSections;
         QString m_languageCode{ QStringLiteral("en") };
     };
 }

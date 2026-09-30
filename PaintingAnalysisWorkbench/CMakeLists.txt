@@ -42,6 +42,8 @@ set(SOURCES
     PublishedReproductionDisplayAdapter.h
     ThicknessPredictionJobController.cpp
     ThicknessPredictionJobController.h
+    OnlineThicknessPredictionJobController.cpp
+    OnlineThicknessPredictionJobController.h
     ThicknessUniformityAnalysis.cpp
     ThicknessUniformityAnalysis.h
     ThicknessLegendWidget.cpp

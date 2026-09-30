@@ -815,10 +815,12 @@ namespace robot_qt_viewer
         m_modeTabBar->addTab(QStringLiteral("Thickness Prediction"));
         m_modeTabBar->addTab(QStringLiteral("Thickness Simulation"));
         m_modeTabBar->addTab(QStringLiteral("Algorithm Reproduction"));
+        m_modeTabBar->addTab(QStringLiteral("Online Thickness Prediction"));
         rootLayout->insertWidget(0, m_modeTabBar);
 
         // Workpiece selection.
         auto* workpieceGroup = new QGroupBox(QStringLiteral("Workpiece"), this);
+        m_workpieceGroup = workpieceGroup;
         auto* workpieceForm = new QFormLayout(workpieceGroup);
         m_workpieceCombo = new QComboBox(workpieceGroup);
         workpieceForm->setContentsMargins(8, 6, 8, 6);
@@ -1029,6 +1031,62 @@ namespace robot_qt_viewer
         optionsLayout->addWidget(m_historyCheckBox);
         rootLayout->addWidget(optionsGroup);
         m_predictionSections.push_back(optionsGroup);
+
+        auto* onlineGroup = new QGroupBox(QStringLiteral("Online Thickness"), this);
+        auto* onlineLayout = new QVBoxLayout(onlineGroup);
+        onlineLayout->setContentsMargins(8, 6, 8, 6);
+        onlineLayout->setSpacing(4);
+        m_onlineAlgorithmCombo = new QComboBox(onlineGroup);
+        m_onlineAlgorithmCombo->addItem(QStringLiteral("Paper Gaussian (GPU)"),
+            static_cast<int>(spraythickness::ThicknessModelKind::PaperGaussian));
+        m_onlineSprayDirectionCombo = new QComboBox(onlineGroup);
+        m_onlinePowderFeedDirectionCombo = new QComboBox(onlineGroup);
+        populateLocalAxisCombo(*m_onlineSprayDirectionCombo, PositiveZ);
+        populateLocalAxisCombo(*m_onlinePowderFeedDirectionCombo, PositiveY);
+        m_onlineBvhCheckBox = new QCheckBox(
+            QStringLiteral("BVH shadow occlusion"), onlineGroup);
+        m_onlineHistoryCheckBox = new QCheckBox(
+            QStringLiteral("Thermal exposure history"), onlineGroup);
+        m_onlineBvhCheckBox->setChecked(true);
+        m_onlineHistoryCheckBox->setChecked(true);
+        auto* onlineForm = new QFormLayout();
+        onlineForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+        onlineForm->addRow(QStringLiteral("Model"), m_onlineAlgorithmCombo);
+        onlineForm->addRow(QStringLiteral("Spray direction"),
+            m_onlineSprayDirectionCombo);
+        onlineForm->addRow(QStringLiteral("Powder feed direction"),
+            m_onlinePowderFeedDirectionCombo);
+        onlineLayout->addLayout(onlineForm);
+        onlineLayout->addWidget(m_onlineBvhCheckBox);
+        onlineLayout->addWidget(m_onlineHistoryCheckBox);
+        auto* onlineButtons = new QHBoxLayout();
+        m_onlineStartButton = new QPushButton(QStringLiteral("Start powder (software)"), onlineGroup);
+        m_onlineStopButton = new QPushButton(QStringLiteral("Stop powder (software)"), onlineGroup);
+        onlineButtons->addWidget(m_onlineStartButton);
+        onlineButtons->addWidget(m_onlineStopButton);
+        onlineLayout->addLayout(onlineButtons);
+        m_onlineStatusLabel = new QLabel(QStringLiteral("Waiting for live RWS poses."), onlineGroup);
+        m_onlineStatusLabel->setWordWrap(true);
+        onlineLayout->addWidget(m_onlineStatusLabel);
+        rootLayout->addWidget(onlineGroup);
+        m_onlineSections.push_back(onlineGroup);
+        connect(m_onlineSprayDirectionCombo,
+            QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, [this](int) {
+                if(std::abs(onlineSprayDirectionLocal().dot(
+                        onlinePowderFeedDirectionLocal())) >= 0.5) {
+                    const int fallback =
+                        std::abs(onlineSprayDirectionLocal().y()) < 0.5
+                            ? PositiveY : PositiveX;
+                    const QSignalBlocker blocker(m_onlinePowderFeedDirectionCombo);
+                    m_onlinePowderFeedDirectionCombo->setCurrentIndex(
+                        m_onlinePowderFeedDirectionCombo->findData(fallback));
+                }
+            });
+        connect(m_onlineStartButton, &QPushButton::clicked,
+            this, &CoatingAnalysisPanel::onlineSprayStartRequested);
+        connect(m_onlineStopButton, &QPushButton::clicked,
+            this, &CoatingAnalysisPanel::onlineSprayStopRequested);
 
         auto* modeGroup = new QGroupBox(QStringLiteral("Prediction Input"), this);
         auto* modeLayout = new QVBoxLayout(modeGroup);
@@ -1353,6 +1411,10 @@ namespace robot_qt_viewer
             section->setMinimumSize(0, 0);
             section->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
         }
+        for(QWidget* section : m_onlineSections) {
+            section->setMinimumSize(0, 0);
+            section->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+        }
         for(QFormLayout* form : findChildren<QFormLayout*>()) {
             form->setRowWrapPolicy(QFormLayout::WrapLongRows);
             form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
@@ -1414,12 +1476,23 @@ namespace robot_qt_viewer
         updateReproductionRecommendation();
     }
 
+    void CoatingAnalysisPanel::setOnlinePredictionState(
+        bool active, bool spraying, const QString& status)
+    {
+        m_onlineActive = active;
+        m_onlineSpraying = spraying;
+        m_onlineStatusLabel->setText(coatingAnalysisTranslate(m_languageCode, status));
+        m_onlineStartButton->setEnabled(!spraying);
+        m_onlineStopButton->setEnabled(spraying);
+    }
+
     void CoatingAnalysisPanel::setModeTab(int index)
     {
         const CoatingAnalysisMode nextMode = index == 1
             ? CoatingAnalysisMode::Simulation
             : (index == 2 ? CoatingAnalysisMode::Reproduction
-                          : CoatingAnalysisMode::Prediction);
+                : (index == 3 ? CoatingAnalysisMode::Online
+                              : CoatingAnalysisMode::Prediction));
         const CoatingAnalysisMode previousMode = m_mode;
         m_mode = nextMode;
         const bool simulation = m_mode == CoatingAnalysisMode::Simulation;
@@ -1432,13 +1505,18 @@ namespace robot_qt_viewer
         updateReproductionInputUi();
         for(QWidget* section : m_sharedSections) {
             if(section != nullptr) {
-                section->setVisible(m_mode == CoatingAnalysisMode::Prediction);
+                section->setVisible(m_mode == CoatingAnalysisMode::Prediction
+                    || (section == m_workpieceGroup
+                        && m_mode == CoatingAnalysisMode::Online));
             }
         }
         for(QWidget* section : m_predictionSections) {
             if(section != nullptr) {
                 section->setVisible(m_mode == CoatingAnalysisMode::Prediction);
             }
+        }
+        for(QWidget* section : m_onlineSections) {
+            section->setVisible(m_mode == CoatingAnalysisMode::Online);
         }
         updateReproductionSourceUi();
         if(previousMode == nextMode) {
@@ -1448,11 +1526,15 @@ namespace robot_qt_viewer
             emit exitSimulationRequested();
         } else if(previousMode == CoatingAnalysisMode::Reproduction) {
             emit exitReproductionRequested();
+        } else if(previousMode == CoatingAnalysisMode::Online) {
+            emit exitOnlineRequested();
         }
         if(nextMode == CoatingAnalysisMode::Simulation) {
             emit enterSimulationRequested();
         } else if(nextMode == CoatingAnalysisMode::Reproduction) {
             emit enterReproductionRequested();
+        } else if(nextMode == CoatingAnalysisMode::Online) {
+            emit enterOnlineRequested();
         }
     }
 
@@ -1471,8 +1553,13 @@ namespace robot_qt_viewer
             updateReproductionInputUi();
             for(QWidget* section : m_sharedSections) {
                 if(section != nullptr) {
-                    section->setVisible(m_mode == CoatingAnalysisMode::Prediction);
+                    section->setVisible(m_mode == CoatingAnalysisMode::Prediction
+                        || (section == m_workpieceGroup
+                            && m_mode == CoatingAnalysisMode::Online));
                 }
+            }
+            for(QWidget* section : m_onlineSections) {
+                section->setVisible(m_mode == CoatingAnalysisMode::Online);
             }
             for(QWidget* section : m_predictionSections) {
                 if(section != nullptr) {
@@ -1571,7 +1658,8 @@ namespace robot_qt_viewer
                 m_workpieceCombo->findData(viewModel.selectedWorkpieceId));
         }
         m_workpieceCombo->setEnabled(
-            !viewModel.workpieces.isEmpty() && !viewModel.predictionRunning);
+            !viewModel.workpieces.isEmpty() && !viewModel.predictionRunning
+            && !(m_mode == CoatingAnalysisMode::Online && m_onlineActive));
         const bool standardControlsEnabled = !viewModel.predictionRunning
             && !viewModel.simulationActive;
         m_openModelButton->setEnabled(standardControlsEnabled);
@@ -1596,6 +1684,14 @@ namespace robot_qt_viewer
             && viewModel.trajectorySamplingApplyRequired);
         updateTrajectorySamplingUi();
         m_algorithmCombo->setEnabled(standardControlsEnabled);
+        m_onlineAlgorithmCombo->setEnabled(!m_onlineActive && !viewModel.predictionRunning);
+        m_onlineSprayDirectionCombo->setEnabled(!m_onlineActive);
+        m_onlinePowderFeedDirectionCombo->setEnabled(!m_onlineActive);
+        m_onlineBvhCheckBox->setEnabled(!m_onlineActive);
+        m_onlineHistoryCheckBox->setEnabled(!m_onlineActive);
+        m_onlineStartButton->setEnabled(!m_onlineSpraying
+            && !viewModel.predictionRunning && !viewModel.reproductionRunning);
+        m_onlineStopButton->setEnabled(m_onlineSpraying);
         m_sprayDirectionCombo->setEnabled(standardControlsEnabled);
         m_powderFeedDirectionCombo->setEnabled(standardControlsEnabled);
         m_bvhCheckBox->setEnabled(standardControlsEnabled);
@@ -1925,6 +2021,26 @@ namespace robot_qt_viewer
     Eigen::Vector3d CoatingAnalysisPanel::powderFeedDirectionLocal() const
     {
         return localAxisVector(m_powderFeedDirectionCombo->currentData().toInt());
+    }
+
+    Eigen::Vector3d CoatingAnalysisPanel::onlineSprayDirectionLocal() const
+    {
+        return localAxisVector(m_onlineSprayDirectionCombo->currentData().toInt());
+    }
+
+    Eigen::Vector3d CoatingAnalysisPanel::onlinePowderFeedDirectionLocal() const
+    {
+        return localAxisVector(m_onlinePowderFeedDirectionCombo->currentData().toInt());
+    }
+
+    bool CoatingAnalysisPanel::onlineBvhOcclusionEnabled() const
+    {
+        return m_onlineBvhCheckBox->isChecked();
+    }
+
+    bool CoatingAnalysisPanel::onlineHistoryCorrectionEnabled() const
+    {
+        return m_onlineHistoryCheckBox->isChecked();
     }
 
     void CoatingAnalysisPanel::ensurePowderFeedDirectionValid()

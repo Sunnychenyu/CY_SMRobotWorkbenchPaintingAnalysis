@@ -33,6 +33,7 @@ namespace robot_qt_viewer
     class CoatingAnalysisVisibilityBar;
     class RobotQtViewerDocumentContext;
     class ThicknessPredictionJobController;
+    class OnlineThicknessPredictionJobController;
     class AlgorithmReproductionJobController;
     struct RobotQtViewerEvent;
 
@@ -127,6 +128,12 @@ namespace robot_qt_viewer
         void handleTrajectorySamplingParametersChanged();
         void applyTrajectorySampling();
         void predictThickness();
+        void startOnlineSpray();
+        void stopOnlineSpray();
+        void resetOnlinePrediction();
+        void handleLiveRobotPose(const RobotQtViewerEvent& event);
+        void flushOnlineTrajectory();
+        void handleOnlineField(const spraythickness::ThicknessPredictionResult& result);
         void setCurrentResultAsReference();
         void clearReferenceResult();
         void checkCurrentResultAgainstReference();
@@ -180,6 +187,9 @@ namespace robot_qt_viewer
         void exportSimulationResult();
         void enterReproduction();
         void exitReproduction();
+        void enterOnline();
+        void exitOnline();
+        void restoreOnlineDisplay();
         void generateReproductionScene(bool focusView = false);
         void generateReproductionTrajectory();
         bool rebuildReproductionScene(QString* errorMessage = nullptr);
@@ -215,6 +225,7 @@ namespace robot_qt_viewer
         void applyWuDisplayScale();
         bool simulationActive() const;
         bool reproductionActive() const;
+        bool onlineModeActive() const;
         bool anyPredictionRunning() const;
 
         void handleWaypointInfoRequested(int index);
@@ -231,6 +242,7 @@ namespace robot_qt_viewer
         RobotQtViewerDocumentContext& m_context;
         CoatingAnalysisSession m_session;
         std::unique_ptr<ThicknessPredictionJobController> m_predictionJob;
+        std::unique_ptr<OnlineThicknessPredictionJobController> m_onlineJob;
         std::unique_ptr<AlgorithmReproductionJobController> m_reproductionJob;
         QString m_status = QStringLiteral("Load a model and trajectory to begin.");
         QString m_predictionObjectId;
@@ -303,9 +315,36 @@ namespace robot_qt_viewer
         CoatingAnalysisSession m_predictionSession;
         CoatingAnalysisSession m_simulationSession;
         CoatingAnalysisSession m_reproductionSession;
+        CoatingAnalysisSession m_onlineSession;
         QHash<QString, bool> m_predictionModelVisibility;
         QHash<QString, bool> m_simulationModelVisibility;
         QHash<QString, bool> m_reproductionModelVisibility;
+        QHash<QString, bool> m_onlineModelVisibility;
         QString m_predictionStatus;
+        QString m_onlineStatus{ QStringLiteral("Waiting for live RWS poses.") };
+        struct OnlineObject
+        {
+            QString id;
+            Eigen::Isometry3d worldFromObject = Eigen::Isometry3d::Identity();
+            PaintingAnalysisMeshBinding binding;
+        };
+        std::vector<OnlineObject> m_onlineObjects;
+        std::vector<spraytrajectory::SprayPathPoint> m_onlinePendingPoints;
+        spraythickness::ThicknessPredictionResult m_onlineResult;
+        Eigen::Isometry3d m_liveGunPose = Eigen::Isometry3d::Identity();
+        Eigen::Isometry3d m_liveTablePose = Eigen::Isometry3d::Identity();
+        Eigen::Isometry3d m_onlineInitialTablePose = Eigen::Isometry3d::Identity();
+        QString m_liveGunRobotId;
+        QString m_liveTableRobotId;
+        QString m_onlineGunRobotId;
+        QString m_onlineTableRobotId;
+        double m_liveSampleTimeSeconds = 0.0;
+        double m_onlineStartTimeSeconds = 0.0;
+        double m_onlineLastPoseTimeSeconds = 0.0;
+        double m_onlineLastFlushTimeSeconds = 0.0;
+        bool m_onlineActive = false;
+        bool m_onlineSpraying = false;
+        bool m_onlineShowThickness = true;
+        bool m_onlinePickEnabled = false;
     };
 }
