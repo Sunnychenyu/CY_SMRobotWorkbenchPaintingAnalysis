@@ -2,6 +2,11 @@
 
 #include <QString>
 
+namespace spraythickness
+{
+    enum class ReproductionAlgorithmKind;
+}
+
 namespace robot_qt_viewer
 {
     // Converts coating-analysis UI text without introducing a dependency on
@@ -9,4 +14,8 @@ namespace robot_qt_viewer
     QString coatingAnalysisTranslate(
         const QString& languageCode,
         const QString& text);
+
+    QString coatingAnalysisReproductionDescription(
+        const QString& languageCode,
+        spraythickness::ReproductionAlgorithmKind algorithm);
 }

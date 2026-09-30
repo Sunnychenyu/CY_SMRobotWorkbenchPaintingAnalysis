@@ -23,6 +23,7 @@ namespace robot_qt_viewer
         static PublishedReproductionDisplayData build(
             const spraythickness::AlgorithmReproductionResult& result,
             const sprayworkpiece::WorkpieceModel& originalWorkpiece,
-            const PaintingAnalysisMeshBinding& originalBinding);
+            const PaintingAnalysisMeshBinding& originalBinding,
+            double wuNormalDisplayScale = 1.0);
     };
 }

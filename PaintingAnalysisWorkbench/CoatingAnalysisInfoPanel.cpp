@@ -10,6 +10,8 @@
 #include <QVariant>
 #include <QVBoxLayout>
 
+#include <algorithm>
+
 namespace robot_qt_viewer
 {
     namespace
@@ -237,8 +239,72 @@ namespace robot_qt_viewer
             const spraythickness::ThicknessPredictionTiming& timing =
                 view.predictionTiming;
             QStringList lines;
-            lines << QStringLiteral("Wall time : %1 s")
-                         .arg(view.predictionElapsedSeconds, 0, 'f', 3);
+            if(view.reproductionTimingValid) {
+                const auto& statistics = view.reproductionStatistics;
+                const double accountedMilliseconds =
+                    view.reproductionPreparationMilliseconds
+                    + view.reproductionCoreMilliseconds
+                    + view.reproductionConversionMilliseconds
+                    + view.reproductionDisplayMilliseconds
+                    + view.reproductionPresentationMilliseconds;
+                const double otherMilliseconds = std::max(0.0,
+                    view.reproductionTotalMilliseconds - accountedMilliseconds);
+                lines << QStringLiteral("Total (first frame):%1 ms")
+                             .arg(view.reproductionTotalMilliseconds, 0, 'f', 3)
+                    << QStringLiteral("Preparation:%1 ms")
+                             .arg(view.reproductionPreparationMilliseconds, 0, 'f', 3)
+                    << QStringLiteral("Algorithm:%1 ms")
+                             .arg(view.reproductionCoreMilliseconds, 0, 'f', 3)
+                    << QStringLiteral("Conversion:%1")
+                             .arg(view.reproductionConversionApplicable
+                                 ? QStringLiteral("%1 ms").arg(
+                                     view.reproductionConversionMilliseconds, 0, 'f', 3)
+                                 : QStringLiteral("N/A"))
+                    << QStringLiteral("Overlay setup:%1 ms")
+                             .arg(view.reproductionDisplayMilliseconds, 0, 'f', 3)
+                    << QStringLiteral("First-frame wait:%1 ms")
+                             .arg(view.reproductionPresentationMilliseconds, 0, 'f', 3)
+                    << QStringLiteral("Scheduling/other:%1 ms")
+                             .arg(otherMilliseconds, 0, 'f', 3)
+                    << QStringLiteral("Input vertices:%1")
+                             .arg(static_cast<qulonglong>(
+                                 view.reproductionInputVertexCount))
+                    << QStringLiteral("Input triangles:%1")
+                             .arg(static_cast<qulonglong>(
+                                 view.reproductionInputTriangleCount))
+                    << QStringLiteral("Display vertices:%1")
+                             .arg(static_cast<qulonglong>(
+                                 view.reproductionOutputVertexCount))
+                    << QStringLiteral("Display triangles:%1")
+                             .arg(static_cast<qulonglong>(
+                                 view.reproductionOutputTriangleCount))
+                    << QStringLiteral("Spray samples:%1")
+                             .arg(static_cast<qulonglong>(
+                                 statistics.trajectorySampleCount))
+                    << QStringLiteral("Evaluated elements:%1")
+                             .arg(static_cast<qulonglong>(
+                                 statistics.evaluatedElementCount))
+                    << QStringLiteral("Method candidates:%1")
+                             .arg(view.reproductionVisibilityCountAvailable
+                                 ? QString::number(static_cast<qulonglong>(
+                                     statistics.candidatePairCount))
+                                 : QStringLiteral("N/A"))
+                    << QStringLiteral("Visibility queries:%1")
+                             .arg(view.reproductionVisibilityCountAvailable
+                                 ? QString::number(static_cast<qulonglong>(
+                                     statistics.visibilityQueryCount))
+                                 : QStringLiteral("N/A"))
+                    << QStringLiteral("Occluded elements:%1")
+                             .arg(view.reproductionHiddenCountAvailable
+                                 ? QString::number(static_cast<qulonglong>(
+                                     statistics.hiddenElementCount))
+                                 : QStringLiteral("N/A"));
+            } else if(view.reproductionFramePending) {
+                lines << QStringLiteral("Total (first frame):Pending");
+            } else {
+                lines << QStringLiteral("Wall time:%1 s")
+                             .arg(view.predictionElapsedSeconds, 0, 'f', 3);
+            }
             if(simulation) {
                 lines << QStringLiteral("Volume    : %1 mm3")
                              .arg(view.simulationThicknessVolumeCubicMillimeters,

@@ -8,6 +8,7 @@
 #include <QObject>
 #include <QPoint>
 #include <QString>
+#include <QStringList>
 
 #include <Eigen/Core>
 
@@ -77,6 +78,7 @@ namespace robot_qt_viewer
         double waypointDurationAt(std::size_t index) const;
 
     public slots:
+        void handleViewportFrameSwapped();
         void setThicknessDisplayRange(
             double minimumMicrometers,
             double maximumMicrometers);
@@ -154,18 +156,44 @@ namespace robot_qt_viewer
         void enterSimulation();
         void exitSimulation();
         void rebuildSimulation(bool runAfterBuild = false, bool focusView = false);
+        void restoreSimulationPreview();
         void runSimulationPrediction();
         void exportSimulationResult();
         void enterReproduction();
         void exitReproduction();
+        void generateReproductionScene(bool focusView = false);
+        void generateReproductionTrajectory();
+        bool rebuildReproductionScene(QString* errorMessage = nullptr);
+        bool rebuildReproductionTrajectory(QString* errorMessage = nullptr);
+        bool displayPreparedReproductionScene(
+            bool focusView, QString* errorMessage = nullptr);
+        void displayPreparedReproductionTrajectory();
+        void restoreReproductionPreviews(bool focusView = false);
+        void updateReproductionPreparationStatus();
+        void invalidateReproductionResult();
+        void clearReproductionGeneratedPreview();
+        void submitReproductionTrajectoryPreview(
+            const spraytrajectory::SprayTrajectory& trajectory);
+        QString activeCoatingObjectId() const;
+        bool generatedReproductionSceneActive() const;
+        bool generatedReproductionTrajectoryActive() const;
         void runAlgorithmReproduction();
+        void startReproductionBenchmark();
+        void advanceReproductionBenchmark();
+        void recordReproductionBenchmarkRun(
+            const QString& status, const QString& error = {});
         void createReproductionTemplate();
         void cancelAlgorithmReproduction();
         void exportAlgorithmReproduction();
         void handleReproductionProgress(double progress, const QString& message);
+        void handleReproductionDiagnostic(
+            const QString& stage, const QString& details);
+        void appendReproductionDiagnostic(
+            const QString& stage, const QString& details);
         void handleReproductionFinished(
             const spraythickness::AlgorithmReproductionResult& result);
         void handleReproductionFailed(const QString& message);
+        void applyWuDisplayScale();
         bool simulationActive() const;
         bool reproductionActive() const;
         bool anyPredictionRunning() const;
@@ -214,14 +242,51 @@ namespace robot_qt_viewer
         QHash<QString, bool> m_modelVisibility;
         CoatingAnalysisMode m_mode{ CoatingAnalysisMode::Prediction };
         bool m_reproductionGpuRun = false;
+        bool m_reproductionRunActive = false;
+        bool m_reproductionTimingValid = false;
+        double m_reproductionPreparationMilliseconds = 0.0;
+        double m_reproductionCoreMilliseconds = 0.0;
+        double m_reproductionConversionMilliseconds = 0.0;
+        double m_reproductionDisplayMilliseconds = 0.0;
+        double m_reproductionPresentationMilliseconds = 0.0;
+        double m_reproductionTotalMilliseconds = 0.0;
+        std::chrono::steady_clock::time_point m_reproductionStartedAt{};
+        std::chrono::steady_clock::time_point m_reproductionOverlayReadyAt{};
+        bool m_reproductionFramePending = false;
+        std::size_t m_reproductionInputVertexCount = 0;
+        std::size_t m_reproductionInputTriangleCount = 0;
+        std::size_t m_reproductionOutputVertexCount = 0;
+        std::size_t m_reproductionOutputTriangleCount = 0;
         QString m_reproductionStatus = QStringLiteral("No reproduction result yet.");
+        QStringList m_reproductionDiagnostics;
+        QString m_reproductionBenchmarkPath;
+        int m_reproductionBenchmarkAlgorithmIndex = 0;
+        int m_reproductionBenchmarkAttempt = 0;
+        bool m_reproductionBenchmarkActive = false;
+        bool m_reproductionBenchmarkRunPending = false;
+        int m_reproductionGpuProgressBucket = -1;
         sprayworkpiece::WorkpieceModel m_reproductionWorkpiece;
+        PlateStackData m_reproductionPlateStack;
+        spraytrajectory::SprayTrajectory m_reproductionGeneratedTrajectory;
+        bool m_reproductionSceneReady = false;
+        bool m_reproductionTrajectoryReady = false;
+        bool m_reproductionSetupInitialized = false;
+        bool m_reproductionGeneratedPreviewVisible = false;
+        bool m_reproductionResultUsesGeneratedScene = false;
+        QString m_reproductionSceneDetails = QStringLiteral("Scene: not generated.");
+        QString m_reproductionTrajectoryDetails =
+            QStringLiteral("Trajectory: not generated.");
         SimulationExperimentData m_simulation;
         bool m_simulationReady = false;
         QString m_simulationReadyStatus;
         QString m_simulationStatus;
         QString m_languageCode{ QStringLiteral("en") };
-        CoatingAnalysisSession m_savedSimulationSession;
-        QHash<QString, bool> m_savedSimulationModelVisibility;
+        CoatingAnalysisSession m_predictionSession;
+        CoatingAnalysisSession m_simulationSession;
+        CoatingAnalysisSession m_reproductionSession;
+        QHash<QString, bool> m_predictionModelVisibility;
+        QHash<QString, bool> m_simulationModelVisibility;
+        QHash<QString, bool> m_reproductionModelVisibility;
+        QString m_predictionStatus;
     };
 }

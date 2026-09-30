@@ -32,7 +32,7 @@ namespace robot_qt_viewer
         int scanPassCount{ 1 };
         double entrySpeedMillimetersPerSecond{ 20.0 };
         double exitSpeedMillimetersPerSecond{ 20.0 };
-        double trajectoryPointIntervalSeconds{ 0.02 };
+        double trajectoryPointIntervalSeconds{ 0.01 };
         double scanStartXMillimeters{ -50.0 };
         double scanStartYMillimeters{ 0.0 };
         double scanEndXMillimeters{ 50.0 };
@@ -51,12 +51,41 @@ namespace robot_qt_viewer
         double thicknessVolumeCubicMillimeters{ 0.0 };
     };
 
+    struct PlateStackParameters
+    {
+        double plateSideMillimeters{ 200.0 };
+        double cellSizeMillimeters{ 2.0 };
+        int plateCount{ 2 };
+        double plateSpacingMillimeters{ 15.0 };
+    };
+
+    struct PlateStackData
+    {
+        PlateStackParameters parameters;
+        std::shared_ptr<assetcore::ModelDesc> displayModel;
+        sprayworkpiece::WorkpieceModel workpiece;
+        sprayworkpiece::WorkpieceModel raycastWorkpiece;
+        std::size_t rowCount{ 0 };
+        std::size_t columnCount{ 0 };
+        double actualCellSizeMeters{ 0.0 };
+    };
+
     class SimulationExperiment
     {
     public:
         static bool build(
             const SimulationExperimentParameters& parameters,
             SimulationExperimentData& output,
+            QString* errorMessage = nullptr);
+
+        static bool buildPlateStack(
+            const PlateStackParameters& parameters,
+            PlateStackData& output,
+            QString* errorMessage = nullptr);
+
+        static bool buildTrajectory(
+            const SimulationExperimentParameters& parameters,
+            spraytrajectory::SprayTrajectory& output,
             QString* errorMessage = nullptr);
 
         static bool exportContourCsv(

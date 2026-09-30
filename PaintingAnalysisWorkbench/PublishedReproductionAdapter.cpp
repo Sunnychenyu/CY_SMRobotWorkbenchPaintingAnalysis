@@ -98,16 +98,6 @@ namespace robot_qt_viewer
             Json result{ { "algorithm",
                 spraythickness::reproductionAlgorithmId(algorithm) } };
             switch(algorithm) {
-            case spraythickness::ReproductionAlgorithmKind::Tanaka2024:
-                result.update({
-                    { "paint_discharge_m3_per_s", nullptr },
-                    { "reference_distance_m", nullptr },
-                    { "reference_sigma_x_m", nullptr },
-                    { "reference_sigma_y_m", nullptr },
-                    { "distance_exponent", nullptr },
-                    { "incidence_exponent", nullptr }
-                });
-                break;
             case spraythickness::ReproductionAlgorithmKind::Tzinava2020:
                 result.update({
                     { "beam_kind", nullptr },
@@ -132,6 +122,7 @@ namespace robot_qt_viewer
             case spraythickness::ReproductionAlgorithmKind::Wu2020:
                 result.update({
                     { "peak_cylinder_height_m", nullptr },
+                    { "reference_pose_duration_s", nullptr },
                     { "gaussian_sigma_m", nullptr },
                     { "maximum_deflection_rad", nullptr },
                     { "ray_angular_step_rad", nullptr },
@@ -172,6 +163,7 @@ namespace robot_qt_viewer
                     { "deposition_batch_duration_s", nullptr },
                     { "random_seed", nullptr },
                     { "relative_build_up_by_inclination_rad", curveTemplate() },
+                    { "relative_build_up_quadratic_per_degree_squared", nullptr },
                     { "voxel_leaf_m", nullptr },
                     { "uniform_sampling_radius_m", nullptr },
                     { "normal_search_radius_m", nullptr },
@@ -255,46 +247,14 @@ namespace robot_qt_viewer
             return result;
         }
 
-        spraythickness::AlgorithmReproductionTask makeTanaka(
-            const sprayworkpiece::WorkpieceModel& workpiece,
-            const std::vector<published::SprayPose>& poses,
-            const Json& json)
-        {
-            published::TanakaInputModel input;
-            input.sprayPoses = poses;
-            for(const sprayworkpiece::SurfaceSample& sample : workpiece.samples) {
-                input.targetPoints.push_back({ sample.position, sample.normal });
-            }
-            published::TanakaParameters parameters;
-            parameters.paintDischargeCubicMetersPerSecond =
-                requiredValue<double>(json, "paint_discharge_m3_per_s");
-            parameters.referenceDistanceMeters =
-                requiredValue<double>(json, "reference_distance_m");
-            parameters.referenceSigmaXMeters =
-                requiredValue<double>(json, "reference_sigma_x_m");
-            parameters.referenceSigmaYMeters =
-                requiredValue<double>(json, "reference_sigma_y_m");
-            parameters.distanceExponent =
-                requiredValue<double>(json, "distance_exponent");
-            parameters.incidenceExponent =
-                requiredValue<double>(json, "incidence_exponent");
-            return { spraythickness::ReproductionAlgorithmKind::Tanaka2024,
-                std::move(input), std::move(parameters) };
-        }
-
         spraythickness::AlgorithmReproductionTask makeTzinava(
             published::TriangleMesh mesh,
             const std::vector<published::SprayPose>& poses,
-            const Json& json,
-            const PublishedReproductionRuntimeInputs& runtimeInputs)
+            const Json& json)
         {
             published::TzinavaInputModel input;
             input.initialMesh = std::move(mesh);
             input.gunTrajectory = poses;
-            input.objectRotationOrigin = runtimeInputs.objectRotationOriginMeters;
-            input.objectRotationAxis = runtimeInputs.objectRotationAxis;
-            input.objectAngularSpeedRadiansPerSecond =
-                runtimeInputs.objectAngularSpeedRadiansPerSecond;
             published::TzinavaParameters parameters;
             const std::string beam = requiredValue<std::string>(json, "beam_kind");
             if(beam == "cylindrical") {
@@ -342,12 +302,16 @@ namespace robot_qt_viewer
         spraythickness::AlgorithmReproductionTask makeWu(
             published::TriangleMesh mesh,
             const std::vector<published::SprayPose>& poses,
-            const Json& json)
+            const Json& json,
+            bool generatedPlateStack)
         {
             published::WuInputModel input{ std::move(mesh), poses };
+            input.generatedPlateStack = generatedPlateStack;
             published::WuParameters parameters;
             parameters.peakCylinderHeightMeters =
                 requiredValue<double>(json, "peak_cylinder_height_m");
+            parameters.referencePoseDurationSeconds =
+                requiredValue<double>(json, "reference_pose_duration_s");
             parameters.gaussianSigmaMeters =
                 requiredValue<double>(json, "gaussian_sigma_m");
             parameters.maximumDeflectionRadians =
@@ -396,6 +360,7 @@ namespace robot_qt_viewer
                 sourceFrame.translation() = toolPose.translation();
                 input.timesSeconds.push_back(value.time);
                 input.workpiecePoses.push_back(sourceFrame.inverse());
+                input.sprayEnabled.push_back(value.sprayEnabled);
             }
             published::FukeParameters parameters;
             parameters.referenceThicknessRateMetersPerSecond =
@@ -462,6 +427,11 @@ namespace robot_qt_viewer
                 requiredValue<std::uint32_t>(json, "random_seed");
             parameters.relativeBuildUpByInclinationRadians =
                 curve(json, "relative_build_up_by_inclination_rad");
+            if(json.contains("relative_build_up_quadratic_per_degree_squared")) {
+                parameters.relativeBuildUpQuadraticPerDegreeSquared =
+                    requiredValue<double>(json,
+                        "relative_build_up_quadratic_per_degree_squared");
+            }
             parameters.voxelLeafMeters =
                 requiredValue<double>(json, "voxel_leaf_m");
             parameters.uniformSamplingRadiusMeters =
@@ -505,18 +475,6 @@ namespace robot_qt_viewer
                 "Supported models (*.stl *.STL *.obj *.OBJ *.dae *.DAE *.ply *.PLY *.gltf *.GLTF *.glb *.GLB *.step *.STEP *.stp *.STP);;All files (*.*)",
                 "Open spray trajectory",
                 false,
-                false,
-                false
-            };
-        case Kind::Tanaka2024:
-            return {
-                "Discrete surface target points with normals",
-                "Timed spray-gun poses",
-                "Open target-point source model",
-                "Supported models (*.stl *.STL *.obj *.OBJ *.dae *.DAE *.ply *.PLY *.gltf *.GLTF *.glb *.GLB *.step *.STEP *.stp *.STP);;All files (*.*)",
-                "Open timed spray-gun trajectory",
-                false,
-                false,
                 false
             };
         case Kind::Tzinava2020:
@@ -527,19 +485,17 @@ namespace robot_qt_viewer
                 "STL surfaces (*.stl *.STL)",
                 "Open Tzinava gun trajectory",
                 true,
-                true,
                 true
             };
         case Kind::Wu2020:
             return {
                 "CAD or mesh collision surface with deposited cylinders",
-                "Nozzle trajectory with internal spatial resampling",
+                "Original nozzle poses without internal resampling",
                 "Open Wu substrate model",
                 "Supported CAD and mesh models (*.stl *.STL *.obj *.OBJ *.dae *.DAE *.ply *.PLY *.gltf *.GLTF *.glb *.GLB *.step *.STEP *.stp *.STP);;All files (*.*)",
                 "Open Wu nozzle trajectory",
                 false,
-                true,
-                false
+                true
             };
         case Kind::Fuke2005:
             return {
@@ -548,7 +504,6 @@ namespace robot_qt_viewer
                 "Open Fuke surface mesh",
                 "Surface meshes (*.stl *.STL *.obj *.OBJ *.ply *.PLY);;All files (*.*)",
                 "Open Fuke relative-pose trajectory",
-                false,
                 false,
                 false
             };
@@ -560,7 +515,6 @@ namespace robot_qt_viewer
                 "STL surfaces (*.stl *.STL)",
                 "Open Vanerio nozzle trajectory",
                 true,
-                false,
                 false
             };
         case Kind::DynamicSurface2026:
@@ -571,11 +525,62 @@ namespace robot_qt_viewer
                 "STL surfaces (*.stl *.STL)",
                 "Open dynamic-surface nozzle trajectory",
                 true,
-                false,
                 false
             };
         }
         throw std::invalid_argument("Unknown published reproduction algorithm.");
+    }
+
+    std::optional<ReproductionTrajectoryPreset>
+    PublishedReproductionAdapter::trajectoryPreset(
+        spraythickness::ReproductionAlgorithmKind algorithm,
+        const std::filesystem::path& configurationPath)
+    {
+        if(algorithm == spraythickness::ReproductionAlgorithmKind::CurrentMethod) {
+            return ReproductionTrajectoryPreset{
+                100.0, 2, 20.0, 1.0, 120.0, 90.0, 50.0, 0.01, 20.0, 1
+            };
+        }
+        const Json json = readConfiguration(configurationPath, algorithm);
+        const auto found = json.find("verified_line_scan");
+        if(found == json.end()) {
+            return std::nullopt;
+        }
+        const Json& value = *found;
+        ReproductionTrajectoryPreset preset;
+        preset.plateSideMillimeters = requiredValue<double>(value, "plate_side_mm");
+        preset.plateCount = requiredValue<int>(value, "plate_count");
+        preset.plateSpacingMillimeters = requiredValue<double>(value, "plate_spacing_mm");
+        preset.cellSizeMillimeters = requiredValue<double>(value, "cell_size_mm");
+        preset.sprayDistanceMillimeters = requiredValue<double>(value, "spray_distance_mm");
+        preset.incidenceAngleDegrees = requiredValue<double>(value, "incidence_angle_deg");
+        preset.scanSpeedMillimetersPerSecond =
+            requiredValue<double>(value, "scan_speed_mm_per_s");
+        preset.pointIntervalSeconds = requiredValue<double>(value, "point_interval_s");
+        preset.overrunMillimeters = requiredValue<double>(value, "overrun_mm");
+        preset.scanPassCount = requiredValue<int>(value, "scan_passes");
+        if(!std::isfinite(preset.plateSideMillimeters)
+            || !std::isfinite(preset.plateSpacingMillimeters)
+            || !std::isfinite(preset.cellSizeMillimeters)
+            || !std::isfinite(preset.sprayDistanceMillimeters)
+            || !std::isfinite(preset.incidenceAngleDegrees)
+            || !std::isfinite(preset.scanSpeedMillimetersPerSecond)
+            || !std::isfinite(preset.pointIntervalSeconds)
+            || !std::isfinite(preset.overrunMillimeters)
+            || preset.plateSideMillimeters <= 0.0 || preset.plateCount <= 0
+            || preset.plateSpacingMillimeters <= 0.0
+            || preset.cellSizeMillimeters <= 0.0
+            || preset.sprayDistanceMillimeters <= 0.0
+            || preset.incidenceAngleDegrees < 0.0
+            || preset.incidenceAngleDegrees > 90.0
+            || preset.scanSpeedMillimetersPerSecond <= 0.0
+            || preset.pointIntervalSeconds <= 0.0
+            || preset.overrunMillimeters < 0.0
+            || preset.scanPassCount <= 0) {
+            throw std::invalid_argument(
+                "The verified line-scan preset contains invalid values.");
+        }
+        return preset;
     }
 
     void PublishedReproductionAdapter::writeConfigurationTemplate(
@@ -628,11 +633,6 @@ namespace robot_qt_viewer
                     + " requires an STL surface model.");
             }
         }
-        if(algorithm == spraythickness::ReproductionAlgorithmKind::Tzinava2020
-            && runtimeInputs.objectRotationAxis.squaredNorm() <= 1.0e-12) {
-            throw std::invalid_argument(
-                "Tzinava reproduction requires a non-zero object rotation axis.");
-        }
         const Json json = readConfiguration(configurationPath, algorithm);
         const spraythickness::TrajectorySamplingMode effectiveSamplingMode =
             profile.forceOriginalTrajectoryPoints
@@ -645,15 +645,13 @@ namespace robot_qt_viewer
                 "Published-method reproduction requires at least two trajectory samples.");
         }
         const auto poses = sprayPoses(trajectorySamples, tool);
-        if(algorithm == spraythickness::ReproductionAlgorithmKind::Tanaka2024) {
-            return makeTanaka(workpiece, poses, json);
-        }
         const published::TriangleMesh mesh = triangleMesh(workpiece);
         switch(algorithm) {
         case spraythickness::ReproductionAlgorithmKind::Tzinava2020:
-            return makeTzinava(mesh, poses, json, runtimeInputs);
+            return makeTzinava(mesh, poses, json);
         case spraythickness::ReproductionAlgorithmKind::Wu2020:
-            return makeWu(mesh, poses, json);
+            return makeWu(mesh, poses, json,
+                runtimeInputs.generatedPlateStack);
         case spraythickness::ReproductionAlgorithmKind::Fuke2005:
             return makeFuke(mesh, trajectorySamples, tool, json);
         case spraythickness::ReproductionAlgorithmKind::Vanerio2021:
@@ -661,7 +659,6 @@ namespace robot_qt_viewer
         case spraythickness::ReproductionAlgorithmKind::DynamicSurface2026:
             return makeDynamicSurface(mesh, poses, json);
         case spraythickness::ReproductionAlgorithmKind::CurrentMethod:
-        case spraythickness::ReproductionAlgorithmKind::Tanaka2024:
             break;
         }
         throw std::invalid_argument("Unknown published reproduction algorithm.");

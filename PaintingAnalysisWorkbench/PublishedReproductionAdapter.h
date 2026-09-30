@@ -6,6 +6,7 @@
 #include <WorkpieceCore/WorkpieceModel.h>
 
 #include <filesystem>
+#include <optional>
 #include <string>
 
 namespace robot_qt_viewer
@@ -19,15 +20,26 @@ namespace robot_qt_viewer
         std::string trajectoryDialogTitle;
         bool requiresStlSurface{ false };
         bool forceOriginalTrajectoryPoints{ false };
-        bool hasObjectRotationInput{ false };
     };
 
     struct PublishedReproductionRuntimeInputs
     {
         std::filesystem::path modelSourcePath;
-        Eigen::Vector3d objectRotationOriginMeters = Eigen::Vector3d::Zero();
-        Eigen::Vector3d objectRotationAxis = Eigen::Vector3d::UnitZ();
-        double objectAngularSpeedRadiansPerSecond{ 0.0 };
+        bool generatedPlateStack{ false };
+    };
+
+    struct ReproductionTrajectoryPreset
+    {
+        double plateSideMillimeters{ 0.0 };
+        int plateCount{ 0 };
+        double plateSpacingMillimeters{ 0.0 };
+        double cellSizeMillimeters{ 0.0 };
+        double sprayDistanceMillimeters{ 0.0 };
+        double incidenceAngleDegrees{ 0.0 };
+        double scanSpeedMillimetersPerSecond{ 0.0 };
+        double pointIntervalSeconds{ 0.0 };
+        double overrunMillimeters{ 0.0 };
+        int scanPassCount{ 0 };
     };
 
     class PublishedReproductionAdapter
@@ -35,6 +47,10 @@ namespace robot_qt_viewer
     public:
         static PublishedReproductionInputProfile inputProfile(
             spraythickness::ReproductionAlgorithmKind algorithm);
+
+        static std::optional<ReproductionTrajectoryPreset> trajectoryPreset(
+            spraythickness::ReproductionAlgorithmKind algorithm,
+            const std::filesystem::path& configurationPath);
 
         static void writeConfigurationTemplate(
             spraythickness::ReproductionAlgorithmKind algorithm,

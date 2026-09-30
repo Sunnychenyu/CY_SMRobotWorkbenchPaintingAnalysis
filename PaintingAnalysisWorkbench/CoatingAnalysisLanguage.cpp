@@ -1,5 +1,7 @@
 #include "CoatingAnalysisLanguage.h"
 
+#include <SprayThicknessPrediction/AlgorithmReproduction.h>
+
 #include <QVector>
 
 #include <algorithm>
@@ -20,25 +22,57 @@ namespace robot_qt_viewer
                 {"Thickness Prediction", "厚度预测"},
                 {"Thickness Simulation", "厚度仿真"},
                 {"Algorithm Reproduction", "算法复现"},
+                {"Method principle", "算法原理"},
+                {"Scene", "场景"},
+                {"Scene source", "场景来源"},
+                {"Imported model", "已导入模型"},
+                {"Generated plate stack", "生成多层平板"},
+                {"Plate count", "平板数量"},
+                {"Z spacing", "Z 向间距"},
+                {"Generate scene", "生成场景"},
+                {"Generate trajectory", "生成轨迹"},
+                {"Apply and generate recommended setup", "应用推荐设置并生成"},
+                {"Run benchmark (1 warm-up + 5 runs)", "批量效率实验（预热1次＋正式5次）"},
+                {"Apply recommended parameters", "应用推荐参数"},
+                {"Recommended scene: side", "推荐场景：边长"},
+                {"Recommended line scan for generated plates", "生成平板的推荐线扫轨迹"},
+                {"Recommended trajectory: no tested preset in this calibration file.", "推荐轨迹：此标定文件没有经过测试的预设。"},
+                {"Recommended trajectory unavailable: ", "无法读取推荐轨迹："},
+                {"Stand-off:", "喷涂距离："},
+                {"incidence:", "入射角："},
+                {"speed:", "扫描速度："},
+                {"Point interval:", "轨迹点间隔："},
+                {"overrun:", "越界长度："},
+                {"round trips:", "往返遍数："},
+                {"Test scene: side", "测试场景：边长"},
+                {"; count ", "；平板数 "},
+                {"; spacing ", "；间距 "},
+                {"; cell ", "；网格单元 "},
+                {"Local test preset; not a published optimum.", "本地测试预设，并非论文给出的最优工况。"},
+                {"Custom-file preset; calculation not verified.", "自定义标定文件的预设，尚未验证计算结果。"},
+                {"Scene differs from the test scene; result is not guaranteed.", "当前场景与测试场景不同，不能保证结果。"},
+                {"Trajectory source", "轨迹来源"},
+                {"Imported trajectory", "已导入轨迹"},
+                {"Generated point spray", "生成点喷涂轨迹"},
+                {"Generated line scan", "生成线扫轨迹"},
+                {"Target span", "目标区域宽度"},
+                {"Scan start XY", "扫描起点 XY"},
+                {"Scan end XY", "扫描终点 XY"},
+                {"Generated multi-layer plate mesh", "生成的多层平板网格"},
+                {"Generated timed spray trajectory", "生成的定时喷涂轨迹"},
                 {"Published algorithm", "已发表算法"},
                 {"Calibration file", "标定文件"},
                 {"Model input", "模型输入"},
                 {"Trajectory input", "轨迹输入"},
-                {"Object rotation", "工件旋转"},
-                {"Origin XYZ", "旋转原点 XYZ"},
-                {"Axis XYZ", "旋转轴 XYZ"},
-                {"Angular speed", "角速度"},
                 {"Required paper-specific JSON calibration", "需要论文专用 JSON 标定文件"},
                 {"Browse...", "浏览..."},
                 {"Create template...", "创建模板..."},
                 {"Select STL Surface", "选择 STL 表面"},
-                {"Select Point Source", "选择离散点源模型"},
                 {"Select Substrate Model", "选择基底模型"},
                 {"Select Surface Mesh", "选择表面网格"},
                 {"Select Pose Sequence", "选择位姿序列"},
                 {"Export result", "导出结果"},
                 {"Current BVH-GPU method", "当前 BVH-GPU 方法"},
-                {"Tanaka et al. (2024)", "Tanaka 等（2024）"},
                 {"Tzinava et al. (2020)", "Tzinava 等（2020）"},
                 {"Wu et al. (2020)", "Wu 等（2020）"},
                 {"Fuke et al. (2005)", "Fuke 等（2005）"},
@@ -46,12 +80,12 @@ namespace robot_qt_viewer
                 {"Dynamic surface evolution (2026)", "动态表面演化（2026）"},
                 {"Triangulated workpiece surface", "三角化工件表面"},
                 {"Timed robot spray poses", "带时间的机器人喷涂位姿"},
-                {"Discrete surface target points with normals", "带法向的离散表面目标点"},
-                {"Timed spray-gun poses", "带时间的喷枪位姿"},
                 {"Triangulated STL surface with beam-based subdivision", "采用喷束细分的 STL 三角表面"},
                 {"Gun trajectory with adaptive internal time stepping", "采用内部自适应时间步的喷枪轨迹"},
                 {"CAD or mesh collision surface with deposited cylinders", "CAD/网格碰撞表面与离散沉积圆柱"},
-                {"Nozzle trajectory with internal spatial resampling", "采用内部空间重采样的喷嘴轨迹"},
+                {"Original nozzle poses without internal resampling", "不进行内部重采样的原始喷嘴位姿"},
+                {"Normal height (display only)", "法向高度（仅显示）"},
+                {"Apply", "应用"},
                 {"Surface-meshed CAD polygons evaluated at centroids", "在面心计算的 CAD 表面多边形网格"},
                 {"Relative vapor-source/workpiece pose sequence", "蒸发源与工件的相对位姿序列"},
                 {"Remeshed evolving STL triangular surface", "动态重网格化的 STL 三角表面"},
@@ -89,6 +123,26 @@ namespace robot_qt_viewer
                 {"Algorithm reproduction failed.", "算法复现失败。"},
                 {"Algorithm reproduction canceled.", "算法复现已取消。"},
                 {"Reproduction inputs changed. Run the selected method again.", "复现输入已更改，请重新运行所选方法。"},
+                {"Scene: not generated.", "场景：尚未生成。"},
+                {"Trajectory: not generated.", "轨迹：尚未生成。"},
+                {"Configure the Scene tab and generate it.", "请在“场景”页完成设置并生成场景。"},
+                {"Configure the Trajectory tab and generate it.", "请在“轨迹”页完成设置并生成轨迹。"},
+                {"Scene settings changed. Generate the scene again.", "场景设置已更改，请重新生成场景。"},
+                {"Trajectory settings changed. Generate the trajectory again.", "轨迹设置已更改，请重新生成轨迹。"},
+                {"The generated trajectory depends on the scene. Generate the trajectory again.", "生成轨迹依赖当前场景，请重新生成轨迹。"},
+                {"Scene model changed. Generate the scene again.", "场景模型已更改，请重新生成场景。"},
+                {"Trajectory data changed. Generate the trajectory again.", "轨迹数据已更改，请重新生成轨迹。"},
+                {"Generate the scene and trajectory before running an algorithm.", "请先分别生成场景和轨迹，再运行算法。"},
+                {"Scene ready:", "场景已就绪："},
+                {"Trajectory ready:", "轨迹已就绪："},
+                {"generated points.", "个生成轨迹点。"},
+                {"Load an analysis model or select the generated plate stack.", "请加载分析模型或选择生成多层平板。"},
+                {"Load a spray trajectory or select a generated trajectory.", "请加载喷涂轨迹或选择生成轨迹。"},
+                {"The viewport is unavailable.", "视口不可用。"},
+                {"Failed to display the generated plate stack.", "无法显示生成的多层平板。"},
+                {"Plate side, grid cell, plate count and spacing must be positive.", "平板边长、网格单元、平板数量和间距必须为正数。"},
+                {"The plate stack exceeds the 20,000,000 vertex safety limit. Increase the grid cell size or reduce the plate count.", "多层平板超过 20,000,000 个顶点的安全上限，请增大网格单元或减少平板数量。"},
+                {"Generated trajectory", "生成轨迹"},
                 {"Calibration template created. Replace every null value before running.", "标定模板已创建。运行前请填写所有 null 参数。"},
                 {"Spray Simulation", "喷涂仿真"},
                 {"Result Validation", "结果验证"},
@@ -100,6 +154,23 @@ namespace robot_qt_viewer
                 {"Trajectory Sampling", "轨迹采样"},
                 {"Thermal History", "热历史"},
                 {"Computation", "计算"},
+                {"Total (first frame)", "总耗时（首帧显示）"},
+                {"Preparation", "任务准备"},
+                {"Algorithm", "算法核心"},
+                {"Conversion", "结果转换"},
+                {"Overlay setup", "云图提交"},
+                {"First-frame wait", "首帧等待"},
+                {"Scheduling/other", "调度及其他"},
+                {"Input vertices", "输入顶点数"},
+                {"Input triangles", "输入三角面片数"},
+                {"Display vertices", "显示顶点数"},
+                {"Display triangles", "显示三角面片数"},
+                {"Pending", "等待中"},
+                {"Spray samples", "喷涂采样数"},
+                {"Evaluated elements", "计算单元数"},
+                {"Method candidates", "方法候选数"},
+                {"Visibility queries", "可见性查询数"},
+                {"Occluded elements", "遮挡单元数"},
                 {"Analysis", "分析"},
                 {"Simulation", "仿真"},
                 {"Prediction Input", "预测输入"},
@@ -401,5 +472,154 @@ namespace robot_qt_viewer
             }
         }
         return result;
+    }
+
+    QString coatingAnalysisReproductionDescription(
+        const QString& languageCode,
+        spraythickness::ReproductionAlgorithmKind algorithm)
+    {
+        using Kind = spraythickness::ReproductionAlgorithmKind;
+        const bool chinese = languageCode.toLower().startsWith(QStringLiteral("zh"));
+        switch(algorithm) {
+        case Kind::CurrentMethod:
+            return chinese ? QString::fromUtf8(R"(计算对象
+对完整工件网格的顶点逐点预测厚度。输入为顶点位置、法向量及带时间的喷枪位姿；喷涂方向和送粉方向确定喷枪局部坐标轴。
+
+沉积模型
+把顶点相对喷枪的位置投影到局部主、副轴，使用两个角度方向上的椭圆高斯分布计算喷束内的沉积强度。角度坐标由横向偏移与轴向距离共同决定，因此同一喷束在不同距离和倾斜表面上的落点形状会随几何关系变化。
+
+几何与时间修正
+每个喷涂点的贡献乘以时间权重、距离平方几何因子、表面入射角投影，以及标定得到的距离效率和角度效率。复现对比固定使用 BVH 射线遮挡：喷枪与顶点之间有其他面片阻挡时，该次贡献为零。可选热历史修正：根据先前有效喷涂和冷却时间调整后续沉积。
+
+累计与适用范围
+计算着色器按批次累加轨迹中各喷涂点对顶点的贡献，得到厚度场。该选项在算法复现页使用当前 GPU 方法及内置沉积参数，不读取论文标定 JSON。遮挡始终开启，热历史开关会改变结果；复杂曲面仍受原始网格分辨率与法向质量影响。)")
+                : QStringLiteral(R"(Evaluation target
+Thickness is predicted at the vertices of the complete workpiece mesh. Inputs are vertex positions and normals plus timed gun poses. The spray and powder-feed directions define the gun-local axes.
+
+Deposition model
+Each vertex is projected onto the gun-local major and minor axes. An elliptical Gaussian in two angular coordinates gives the beam intensity. The angles depend on lateral offset and axial distance, so the footprint changes geometrically with stand-off and surface inclination.
+
+Geometry and time corrections
+Each pose contributes according to its duration, inverse-square distance geometry, incidence projection, and calibrated distance and angle efficiency curves. BVH ray occlusion is always enabled for reproduction and rejects contributions blocked by another triangle. Optional thermal-history correction adjusts later deposition according to previous exposure and cooling.
+
+Accumulation and scope
+A GPU compute shader accumulates spray-pose contributions in batches into a vertex thickness field. In this reproduction tab the current method uses built-in deposition parameters, not a paper-specific JSON file. Occlusion stays enabled while the history switch can change the result; fine surface features still depend on mesh and normal quality.)");
+        case Kind::Tzinava2020:
+            return chinese ? QString::fromUtf8(R"(计算对象
+输入 STL 三角表面与喷枪轨迹。首先按喷束尺度细分过长的三角形边，再以细分后的面片为厚度计算单元，而非直接在原始顶点上计算。
+
+喷束与候选面片
+逐时间步插值喷枪位置、方向和速度；仅将面心落在喷束内的面片列为候选，并计算喷涂距离、入射角、径向位置及喷斑相对移动速度。遮挡遵循论文第 2.2 节：将候选三角形正交投影到垂直喷轴的平面，若较近面片的投影与较远面片相交，则后者不累计厚度。这里不是面心射线遮挡。时间步长按第 2.5 节自适应选择。
+
+沉积与累计
+基础厚度由距离和入射角二维标定表插值得到。可选径向高斯因子进一步调整喷斑内的分布；运动喷涂按论文式 (9) 的喷斑速度函数修正，同一次连续可见覆盖只计一次；停驻喷涂按持续时间与标定停驻时间之比累计。论文没有说明连续覆盖期间选用哪个采样位置，程序取该次覆盖的最大贡献，这是明确的数值实现约定。
+
+实现边界
+标定文件包含喷束几何、厚度查表、速度系数和时间步参数。速度系数取自论文式 (8)，但随附的距离-角度厚度表是本地估计，不是论文的原始实验表；定量比较需要替换为相应实验数据。最终结果以细分面片厚度为基础呈现。)")
+                : QStringLiteral(R"(Evaluation target
+Inputs are an STL triangle surface and a gun trajectory. Long mesh edges are subdivided relative to beam size. Thickness is evaluated on the resulting faces rather than directly on original vertices.
+
+Beam and candidate faces
+Gun position, axis and velocity are interpolated in time. Only faces whose centroids lie inside the beam are candidates. Section 2.2 shadowing orthographically projects candidate triangles onto a plane normal to the spray axis; a nearer overlapping projected triangle hides a farther one. This is not a centroid ray test. Time steps follow Section 2.5.
+
+Deposition and accumulation
+A two-dimensional calibration table provides base thickness by distance and impact angle. An optional radial Gaussian shapes the footprint. Moving deposition uses the Eq. (9) spot-speed correction once per continuous visible pass; stationary spraying scales with dwell time. The paper does not specify which sample represents a continuous pass, so this implementation retains the largest contribution during that pass.
+
+Implementation boundary
+The JSON contains beam geometry, the thickness table, speed coefficients and stepping parameters. The speed coefficients follow Eq. (8), but the bundled distance-angle thickness table is a local estimate, not the paper's original measurements. Quantitative comparison requires corresponding experimental data.)");
+        case Kind::Wu2020:
+            return chinese ? QString::fromUtf8(R"(计算对象
+在原始基底网格上叠加离散沉积圆柱，模拟逐步增长的涂层几何。仅使用输入的原始喷涂点，不再进行内部轨迹插值；每个有效喷枪位姿发射一组覆盖喷束角度范围的射线。
+
+几何命中与遮挡
+每条射线只取基底或此前喷涂点沉积圆柱上的最近命中点。同一喷涂点的所有射线先完成查询，再统一提交新圆柱，因此不会在同一位姿内自堆叠。前方几何自然截断射线，后续喷涂点可以沉积到已有圆柱上。
+
+沉积高度
+命中位置的径向距离进入高斯函数；喷涂角、喷涂距离和喷枪横移速度分别进入标定的相对沉积效率或峰值修正函数。每个喷涂点的高度按到下一点的时间间隔与标定参考时长之比缩放，末点不额外沉积；计算出的高度与给定圆柱半径共同形成一个新的沉积圆柱。
+
+实现边界
+这里输出的核心是离散圆柱及其高度，不是简单的固定网格顶点逐点求和。算法复现生成平板使用更密射线和按喷涂距离匹配的物理圆柱半径；法向高度放大只改变显示，不改变真实厚度。结果仍受输入轨迹密度与经验标定曲线影响。)")
+                : QStringLiteral(R"(Evaluation target
+Discrete deposited cylinders are added to an initial substrate mesh to represent growing coating geometry. Only the supplied nozzle poses are used, without internal trajectory interpolation. Each active pose emits rays over the configured angular range.
+
+Hits and shadowing
+Each ray uses its nearest hit on the substrate or cylinders deposited by earlier poses. All rays at one pose are evaluated before that pose's cylinders are committed, preventing self-stacking within a pose. Front geometry blocks farther surfaces, while later poses can hit the growing deposit.
+
+Deposited height
+Radial distance enters a Gaussian profile. Spray angle, spray distance and traverse speed enter calibrated relative-deposition-efficiency or peak-correction functions. Each pose's height is scaled by its interval to the next pose relative to the calibration duration; the final pose adds no deposition. The resulting height and configured radius define a new deposited cylinder.
+
+Implementation boundary
+The native result is a set of cylinders and heights, not a simple per-vertex sum on a fixed mesh. Generated plate scenes use denser rays and a physical radius matched to the spray distance. Normal-height scaling affects only display geometry, not the physical thickness. Input pose density and empirical calibration still affect the outcome.)");
+        case Kind::Fuke2005:
+            return chinese ? QString::fromUtf8(R"(计算对象
+把工件表面划分为多边形，以多边形面心作为厚度评价位置。输入为蒸发源与工件之间带时间的相对位姿；程序按位姿更新面心和法向。
+
+通量模型
+蒸发源的方向性用源轴与射出方向夹角余弦的幂次表示；传播到表面的强度再按距离平方反比衰减，并乘以面法向的入射投影。参考厚度速率、参考距离和羽流指数由 JSON 提供。
+
+可见性与时间累计
+仅当前向发射且表面迎向蒸发源时才有贡献。对每个面心，从源点进行射线可见性检查；若更近的其他面片挡住射线，该面本次不沉积。可见面的速率乘以相邻位姿时间差并累加。
+
+实现边界
+该方法表达的是定向蒸发源通量，不是喷枪椭圆高斯喷斑。计算单元是面心，所以很小的局部特征需要足够细的多边形网格才能分辨。)")
+                : QStringLiteral(R"(Evaluation target
+The workpiece is divided into polygons, with thickness evaluated at polygon centroids. Timed relative source/workpiece poses update each centroid and its normal.
+
+Flux model
+Source directionality is a power of the cosine between the source axis and emission direction. Flux at the surface falls with inverse-square distance and is multiplied by the surface incidence projection. The JSON supplies reference rate, reference distance and plume exponent.
+
+Visibility and time accumulation
+Only forward emission onto a facing surface contributes. A ray from the source to each centroid checks whether another triangle lies closer; blocked polygons receive no deposition for that interval. Visible rates are multiplied by pose duration and accumulated.
+
+Implementation boundary
+This is a directional vapor-source model, not an elliptical Gaussian spray-gun footprint. Centroid evaluation requires sufficiently fine polygons to resolve small local features.)");
+        case Kind::Vanerio2021:
+            return chinese ? QString::fromUtf8(R"(计算对象
+使用可演化的 STL 三角表面。计算前先把超过最大边长的网格边二分，以便后续涂层生长能够改变局部表面形状。
+
+候选与遮挡
+每个喷枪位姿先把喷束中的顶点投影到横向网格单元，选取各单元最靠近喷枪的顶点，再将其相邻面片视为可见候选。这是离散阴影网格近似，而不是对每个面心执行精确射线求交。
+
+沉积与表面生长
+对候选面片计算面心、法向、喷涂距离、倾斜度与径向距离。径向分布随距离标定的拉伸量改变，同时乘以角度效率、距离效率和生长速率；乘以时间步长得到面片增量。相邻面片增量平均到顶点，并沿生长方向移动顶点；必要时再次细分过长的边。
+
+实现边界
+该方法直接改变网格形状，因此与固定网格厚度求和的结果定义不同。随附 JSON 的材料效率与喷斑拉伸曲线是本地估计，需用目标材料的实测值替换；论文也没有给出完整重网格实现，当前程序使用最长边二分。)")
+                : QStringLiteral(R"(Evaluation target
+An evolving STL triangle surface is used. Before prediction, edges exceeding the configured maximum length are bisected so later coating growth can change local shape.
+
+Candidates and shadowing
+For each pose, beam-region vertices are projected into transverse grid cells. The nearest vertex in each cell marks adjacent faces as visible candidates. This is a discrete shadow-grid approximation, not an exact ray test for every face centroid.
+
+Deposition and surface growth
+Candidate faces are evaluated at their centroids using normal, distance, inclination and radial offset. A distance-dependent stretch changes the radial profile, which is multiplied by angle efficiency, distance efficiency, growth rate and time step. Neighboring face increments are averaged onto vertices and displace them along the growth direction. Long edges are bisected again when needed.
+
+Implementation boundary
+This method changes the mesh itself, so its output differs in meaning from a sum on a fixed mesh. The bundled material-efficiency and footprint-stretch curves are local estimates requiring measurements for the chosen material. The paper does not publish a complete remesher; this implementation uses longest-edge bisection.)");
+        case Kind::DynamicSurface2026:
+            return chinese ? QString::fromUtf8(R"(计算对象
+从初始 STL 表面出发，以等效颗粒和沉积圆柱表示涂层增长。带时间的喷枪轨迹按设定批次处理，每批更新一次表面，而不只在原始顶点上记录厚度。
+
+颗粒投射
+在喷枪局部坐标中按极角分布生成加权的射出方向，并按给定随机种子抽取颗粒。射线与当前表面求最近交点；未命中的颗粒丢弃。随附标定在论文实验的 0–40° 范围内使用 Rbu(θ)=1−1.482×10⁻⁴θ²（θ 以度计）调整沉积圆柱高度；超出该范围不外推。
+
+重叠与重建
+同批圆柱的重叠体积按本实现的规则分配；随后提取圆柱顶端和表面点，进行点云降采样、法向估计、区域识别和局部表面重建。重建后的网格成为下一批颗粒的碰撞表面，因此前一批沉积会影响后续命中。
+
+实现边界
+这是计算和内存开销较高的动态几何方法。论文未公开全部重叠求解、孔洞修补与平滑数值细节，程序采用可复现的近似实现；结果还受随机种子、批次长度和点云重建参数影响。)")
+                : QStringLiteral(R"(Evaluation target
+Starting from an STL surface, coating growth is represented by equivalent particles and deposited cylinders. A timed nozzle path is processed in batches, updating the surface after each batch rather than only storing thickness on original vertices.
+
+Particle projection
+Weighted ejection directions are generated in gun-local polar coordinates and sampled with a configured random seed. Each ray takes the nearest hit on the current surface; misses are discarded. The bundled calibration uses Rbu(theta)=1-1.482e-4*theta^2 (theta in degrees) over the paper's measured 0-40 degree range to set cylinder height; it does not extrapolate beyond that range.
+
+Overlap and reconstruction
+Overlapping volume among same-batch cylinders is redistributed by this implementation. Cylinder tips and surface points feed point-cloud downsampling, normal estimation, region detection and local surface reconstruction. The rebuilt mesh becomes the collision surface for later particles, so earlier deposition affects subsequent hits.
+
+Implementation boundary
+This dynamic-geometry approach is computationally and memory intensive. The paper does not specify all overlap, hole-repair and smoothing numerics, so the program uses reproducible approximations. Random seed, batch duration and reconstruction settings also affect the result.)");
+        }
+        return {};
     }
 }

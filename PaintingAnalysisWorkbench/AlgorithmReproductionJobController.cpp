@@ -89,17 +89,26 @@ namespace robot_qt_viewer
                 m_pendingTask.reset();
             }
 
+            std::string currentStage = "Task dispatch";
             try {
                 spraythickness::published::ReproductionExecution execution;
                 execution.cancelRequested = &m_cancelRequested;
                 execution.progress = [this](double value, const std::string& message) {
                     postProgress(value, message);
                 };
+                execution.diagnostic = [this, &currentStage](
+                    const std::string& stage, const std::string& details) {
+                    currentStage = stage;
+                    postDiagnostic(stage, details);
+                };
                 postFinished(spraythickness::AlgorithmReproducer::run(*task, execution));
             } catch(const std::exception& exception) {
-                postFailure(QString::fromLocal8Bit(exception.what()));
+                postFailure(QStringLiteral("%1: %2")
+                    .arg(QString::fromStdString(currentStage),
+                        QString::fromLocal8Bit(exception.what())));
             } catch(...) {
-                postFailure(QStringLiteral("Unknown algorithm reproduction error."));
+                postFailure(QStringLiteral("%1: Unknown algorithm reproduction error.")
+                    .arg(QString::fromStdString(currentStage)));
             }
 
             m_running.store(false);
@@ -113,6 +122,16 @@ namespace robot_qt_viewer
     {
         QMetaObject::invokeMethod(this, [this, progress, message]() {
             emit progressChanged(progress, QString::fromStdString(message));
+        }, Qt::QueuedConnection);
+    }
+
+    void AlgorithmReproductionJobController::postDiagnostic(
+        const std::string& stage,
+        const std::string& details)
+    {
+        QMetaObject::invokeMethod(this, [this, stage, details]() {
+            emit diagnosticChanged(QString::fromStdString(stage),
+                QString::fromStdString(details));
         }, Qt::QueuedConnection);
     }
 

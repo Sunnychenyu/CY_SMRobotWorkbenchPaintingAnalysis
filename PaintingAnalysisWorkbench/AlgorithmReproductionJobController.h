@@ -31,6 +31,7 @@ namespace robot_qt_viewer
     signals:
         void runningChanged(bool running);
         void progressChanged(double progress, const QString& message);
+        void diagnosticChanged(const QString& stage, const QString& details);
         void reproductionFinished(
             const spraythickness::AlgorithmReproductionResult& result);
         void reproductionFailed(const QString& message);
@@ -38,6 +39,7 @@ namespace robot_qt_viewer
     private:
         void workerLoop();
         void postProgress(double progress, const std::string& message);
+        void postDiagnostic(const std::string& stage, const std::string& details);
         void postFinished(spraythickness::AlgorithmReproductionResult result);
         void postFailure(QString message);
         void postRunningChanged(bool running);

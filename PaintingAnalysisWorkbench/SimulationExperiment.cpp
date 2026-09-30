@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace robot_qt_viewer
 {
@@ -209,15 +210,17 @@ namespace robot_qt_viewer
                 }
                 return false;
             }
-            const double speed = std::max(0.001,
-                parameters.scanSpeedMillimetersPerSecond * kMillimetersToMeters);
-            const double entry = std::max(0.0, parameters.entrySpeedMillimetersPerSecond
-                * kMillimetersToMeters);
-            const double exit = std::max(0.0, parameters.exitSpeedMillimetersPerSecond
-                * kMillimetersToMeters);
-            const double entryDuration = entry > 0.0 ? overrunMeters / entry : 0.0;
-            const double scanDuration = std::max(0.001, scanLength / speed);
-            const double exitDuration = exit > 0.0 ? overrunMeters / exit : 0.0;
+            if(!std::isfinite(parameters.scanSpeedMillimetersPerSecond)
+                || parameters.scanSpeedMillimetersPerSecond <= 0.0) {
+                if(errorMessage != nullptr) {
+                    *errorMessage = QStringLiteral("Scan speed must be positive.");
+                }
+                return false;
+            }
+            const double speed = parameters.scanSpeedMillimetersPerSecond
+                * kMillimetersToMeters;
+            const double overrunDuration = overrunMeters / speed;
+            const double scanDuration = scanLength / speed;
             const Eigen::Vector3d scanDirection = (end - start).normalized();
             const int passCount = std::max(1, parameters.scanPassCount);
             double currentTime = 0.0;
@@ -237,10 +240,6 @@ namespace robot_qt_viewer
                         legEnd + legDirection * overrunMeters;
                     const Eigen::Vector3d entryPosition =
                         entryTarget - sprayDirection * distanceMeters;
-                    const Eigen::Vector3d legStartPosition =
-                        legStart - sprayDirection * distanceMeters;
-                    const Eigen::Vector3d legEndPosition =
-                        legEnd - sprayDirection * distanceMeters;
                     const Eigen::Vector3d exitPosition =
                         exitTarget - sprayDirection * distanceMeters;
                     if(firstPoint) {
@@ -248,33 +247,16 @@ namespace robot_qt_viewer
                             currentTime, entryPosition, rotation, distanceMeters, true));
                         firstPoint = false;
                     }
-                    currentTime += entryDuration;
-                    segment.points.push_back(makePoint(
-                        currentTime, legStartPosition, rotation, distanceMeters, true));
-                    currentTime += scanDuration;
-                    segment.points.push_back(makePoint(
-                        currentTime, legEndPosition, rotation, distanceMeters, true));
-                    currentTime += exitDuration;
+                    // The entire leg has one speed; plate-edge knots would add
+                    // extra deposition samples when each interval is resampled.
+                    currentTime += scanDuration + 2.0 * overrunDuration;
                     segment.points.push_back(makePoint(
                         currentTime, exitPosition, rotation, distanceMeters, true));
                 }
             }
-            // Every configured pass contains a forward and a reverse leg, so
-            // the final leg always returns to the start side of the plate.
-            const Eigen::Vector3d finalDirection = -scanDirection;
-            const Eigen::Vector3d finalExitTarget =
-                start + finalDirection * overrunMeters;
-            const Eigen::Vector3d shutdownTarget =
-                finalExitTarget + finalDirection * overrunMeters;
-            const double shutdownDuration = exit > 0.0
-                ? overrunMeters / exit : 0.0;
-            currentTime += shutdownDuration;
-            segment.points.push_back(makePoint(
-                currentTime,
-                shutdownTarget - sprayDirection * distanceMeters,
-                rotation,
-                distanceMeters,
-                false));
+            // A round trip already ends at the start-side overrun. Turn off
+            // spray there without extending the path beyond that endpoint.
+            segment.points.back().sprayEnabled = false;
         }
         trajectory.segments.push_back(std::move(segment));
 
@@ -320,6 +302,166 @@ namespace robot_qt_viewer
         if(errorMessage != nullptr) {
             errorMessage->clear();
         }
+        return true;
+    }
+
+    bool SimulationExperiment::buildPlateStack(
+        const PlateStackParameters& parameters,
+        PlateStackData& output,
+        QString* errorMessage)
+    {
+        if(parameters.plateSideMillimeters <= 0.0
+            || parameters.cellSizeMillimeters <= 0.0
+            || parameters.plateCount <= 0
+            || (parameters.plateCount > 1
+                && parameters.plateSpacingMillimeters <= 0.0)) {
+            if(errorMessage != nullptr) {
+                *errorMessage = QStringLiteral(
+                    "Plate side, grid cell, plate count and spacing must be positive.");
+            }
+            return false;
+        }
+
+        const std::size_t columns = std::max<std::size_t>(
+            1, static_cast<std::size_t>(std::llround(
+                parameters.plateSideMillimeters / parameters.cellSizeMillimeters)));
+        const std::size_t rows = columns;
+        const std::size_t vertexColumns = columns + 1;
+        const std::size_t vertexRows = rows + 1;
+        constexpr std::size_t maximumVertexCount = 20000000;
+        const long double requestedVertexCount =
+            static_cast<long double>(vertexColumns)
+            * static_cast<long double>(vertexRows)
+            * static_cast<long double>(parameters.plateCount);
+        if(requestedVertexCount > maximumVertexCount
+            || requestedVertexCount
+                > static_cast<long double>(std::numeric_limits<std::uint32_t>::max())) {
+            if(errorMessage != nullptr) {
+                *errorMessage = QStringLiteral(
+                    "The plate stack exceeds the 20,000,000 vertex safety limit. "
+                    "Increase the grid cell size or reduce the plate count.");
+            }
+            return false;
+        }
+
+        const std::size_t verticesPerPlate = vertexColumns * vertexRows;
+        const std::size_t totalVertexCount =
+            verticesPerPlate * static_cast<std::size_t>(parameters.plateCount);
+        const std::size_t totalIndexCount = columns * rows * 6
+            * static_cast<std::size_t>(parameters.plateCount);
+        const double sideMeters = parameters.plateSideMillimeters
+            * kMillimetersToMeters;
+        const double cellMeters = sideMeters / static_cast<double>(columns);
+        const double spacingMeters = parameters.plateSpacingMillimeters
+            * kMillimetersToMeters;
+
+        auto model = std::make_shared<assetcore::ModelDesc>();
+        assetcore::SubMeshDesc subMesh;
+        subMesh.name = "Algorithm reproduction plate stack";
+        subMesh.geometry.positions.reserve(totalVertexCount);
+        subMesh.geometry.normals.reserve(totalVertexCount);
+        subMesh.geometry.colors.reserve(totalVertexCount);
+        subMesh.geometry.indices.reserve(totalIndexCount);
+
+        sprayworkpiece::WorkpieceModel workpiece;
+        workpiece.name = "Algorithm reproduction plate stack";
+        workpiece.sourceMeshPath =
+            "simulation://algorithm-reproduction-plate-stack.stl";
+        workpiece.samples.reserve(totalVertexCount);
+        workpiece.triangleIndices.reserve(totalIndexCount);
+        sprayworkpiece::WorkpieceModel raycastWorkpiece;
+        raycastWorkpiece.name = "Algorithm reproduction square surfaces";
+        raycastWorkpiece.sourceMeshPath = workpiece.sourceMeshPath;
+        raycastWorkpiece.samples.reserve(
+            4 * static_cast<std::size_t>(parameters.plateCount));
+        raycastWorkpiece.triangleIndices.reserve(
+            6 * static_cast<std::size_t>(parameters.plateCount));
+
+        for(int plateIndex = 0; plateIndex < parameters.plateCount; ++plateIndex) {
+            const double z = -static_cast<double>(plateIndex) * spacingMeters;
+            const std::uint32_t cornerOffset = static_cast<std::uint32_t>(
+                raycastWorkpiece.samples.size());
+            for(const Eigen::Vector2d& corner : {
+                    Eigen::Vector2d(-0.5, -0.5),
+                    Eigen::Vector2d(0.5, -0.5),
+                    Eigen::Vector2d(-0.5, 0.5),
+                    Eigen::Vector2d(0.5, 0.5) }) {
+                sprayworkpiece::SurfaceSample sample;
+                sample.position = Eigen::Vector3d(
+                    corner.x() * sideMeters, corner.y() * sideMeters, z);
+                sample.normal = Eigen::Vector3d::UnitZ();
+                sample.areaWeight = sideMeters * sideMeters * 0.25;
+                raycastWorkpiece.addSample(sample);
+            }
+            raycastWorkpiece.triangleIndices.insert(
+                raycastWorkpiece.triangleIndices.end(),
+                { cornerOffset, cornerOffset + 1, cornerOffset + 2,
+                  cornerOffset + 1, cornerOffset + 3, cornerOffset + 2 });
+            const std::uint32_t vertexOffset = static_cast<std::uint32_t>(
+                static_cast<std::size_t>(plateIndex) * verticesPerPlate);
+            for(std::size_t row = 0; row < vertexRows; ++row) {
+                for(std::size_t column = 0; column < vertexColumns; ++column) {
+                    const double x =
+                        (static_cast<double>(column) / columns - 0.5) * sideMeters;
+                    const double y =
+                        (static_cast<double>(row) / rows - 0.5) * sideMeters;
+                    subMesh.geometry.positions.emplace_back(
+                        static_cast<float>(x),
+                        static_cast<float>(y),
+                        static_cast<float>(z));
+                    subMesh.geometry.normals.emplace_back(0.0f, 0.0f, 1.0f);
+                    subMesh.geometry.colors.emplace_back(0.78f, 0.78f, 0.78f);
+
+                    sprayworkpiece::SurfaceSample sample;
+                    sample.position = Eigen::Vector3d(x, y, z);
+                    sample.normal = Eigen::Vector3d::UnitZ();
+                    sample.areaWeight = cellMeters * cellMeters;
+                    workpiece.addSample(sample);
+                }
+            }
+            for(std::size_t row = 0; row < rows; ++row) {
+                for(std::size_t column = 0; column < columns; ++column) {
+                    const std::uint32_t a = vertexOffset
+                        + static_cast<std::uint32_t>(row * vertexColumns + column);
+                    const std::uint32_t b = a + 1;
+                    const std::uint32_t c = vertexOffset
+                        + static_cast<std::uint32_t>((row + 1) * vertexColumns + column);
+                    const std::uint32_t d = c + 1;
+                    subMesh.geometry.indices.insert(
+                        subMesh.geometry.indices.end(), { a, b, c, b, d, c });
+                    workpiece.triangleIndices.insert(
+                        workpiece.triangleIndices.end(), { a, b, c, b, d, c });
+                }
+            }
+        }
+
+        model->addSubMesh(std::move(subMesh));
+        output.parameters = parameters;
+        output.displayModel = std::move(model);
+        output.workpiece = std::move(workpiece);
+        output.raycastWorkpiece = std::move(raycastWorkpiece);
+        output.rowCount = rows;
+        output.columnCount = columns;
+        output.actualCellSizeMeters = cellMeters;
+        if(errorMessage != nullptr) {
+            errorMessage->clear();
+        }
+        return true;
+    }
+
+    bool SimulationExperiment::buildTrajectory(
+        const SimulationExperimentParameters& parameters,
+        spraytrajectory::SprayTrajectory& output,
+        QString* errorMessage)
+    {
+        SimulationExperimentParameters lightweight = parameters;
+        lightweight.cellSizeMillimeters = std::max(
+            parameters.plateSideMillimeters, 1.0);
+        SimulationExperimentData experiment;
+        if(!build(lightweight, experiment, errorMessage)) {
+            return false;
+        }
+        output = std::move(experiment.trajectory);
         return true;
     }
 
