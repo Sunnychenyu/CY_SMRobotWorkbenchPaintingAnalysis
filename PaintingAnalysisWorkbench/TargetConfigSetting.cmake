@@ -15,4 +15,5 @@ set(${TARGET_NAME}_RequiredLibsPrivate
     Common::GLRuntime
     SMRobotPlatform::SimulationProject
     SMRobotSpray::SprayThicknessPredictionOpenGL
+    SMRobotSpray::RotationBodyTrajectoryOptimization
 )

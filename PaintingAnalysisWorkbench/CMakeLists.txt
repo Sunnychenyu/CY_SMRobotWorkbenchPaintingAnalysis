@@ -64,6 +64,7 @@ target_link_libraries(${TARGET_NAME}
         SMRobotPlatform::VisualizationSDK
         SMRobotSpray::SprayThicknessPrediction
         SMRobotSpray::SprayTrajectoryCore
+        SMRobotSpray::RotationBodyTrajectoryPlanning
     PRIVATE
         Qt5::Gui
         Qt5::Widgets
@@ -71,6 +72,7 @@ target_link_libraries(${TARGET_NAME}
         Common::GLRuntime
         SMRobotPlatform::SimulationProject
         SMRobotSpray::SprayThicknessPredictionOpenGL
+        SMRobotSpray::RotationBodyTrajectoryOptimization
         nlohmann_json::nlohmann_json
 )
 
