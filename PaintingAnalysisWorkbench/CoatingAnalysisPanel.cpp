@@ -851,9 +851,11 @@ namespace robot_qt_viewer
         dataLayout->setContentsMargins(8, 6, 8, 6);
         dataLayout->setSpacing(6);
         m_openModelButton = new QPushButton(QStringLiteral("Debug Model"), dataGroup);
-        m_openTrajectoryButton = new QPushButton(QStringLiteral("Load Selected Trajectory"), dataGroup);
+        m_openTrajectoryButton = new QPushButton(QStringLiteral("Debug Trajectory"), dataGroup);
         m_selectModelButton = new QPushButton(QStringLiteral("Select Model File"), dataGroup);
         m_selectTrajectoryButton = new QPushButton(QStringLiteral("Select Trajectory File"), dataGroup);
+        m_loadSavedTrajectoryButton = new QPushButton(
+            QStringLiteral("Load Selected Trajectory"), dataGroup);
         m_savedTrajectorySourceCombo = new QComboBox(dataGroup);
         m_savedTrajectorySourceCombo->addItem(
             QStringLiteral("Trajectory planning"),
@@ -873,6 +875,8 @@ namespace robot_qt_viewer
         m_openModelButton->setToolTip(
             QStringLiteral("Load the configured debug workpiece model."));
         m_openTrajectoryButton->setToolTip(
+            QStringLiteral("Load the configured debug spray trajectory."));
+        m_loadSavedTrajectoryButton->setToolTip(
             QStringLiteral("Load the selected planned trajectory or the selected dual/three-trajectory optimization data for the workpiece."));
         m_selectModelButton->setToolTip(QStringLiteral("Choose a workpiece model file."));
         m_selectTrajectoryButton->setToolTip(QStringLiteral("Choose a spray trajectory file."));
@@ -883,22 +887,26 @@ namespace robot_qt_viewer
         m_selectModelButton->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
         m_selectTrajectoryButton->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
         for(QPushButton* button : { m_openModelButton, m_openTrajectoryButton,
-            m_selectModelButton, m_selectTrajectoryButton }) {
+            m_selectModelButton, m_selectTrajectoryButton,
+            m_loadSavedTrajectoryButton }) {
             button->setMinimumWidth(0);
             button->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
         }
-        dataLayout->addWidget(new QLabel(QStringLiteral("Saved trajectory source"), dataGroup), 0, 0);
-        dataLayout->addWidget(m_savedTrajectorySourceCombo, 0, 1);
-        dataLayout->addWidget(m_openModelButton, 1, 0);
-        dataLayout->addWidget(m_openTrajectoryButton, 1, 1);
-        dataLayout->addWidget(m_selectModelButton, 2, 0);
-        dataLayout->addWidget(m_selectTrajectoryButton, 2, 1);
+        dataLayout->addWidget(m_openModelButton, 0, 0);
+        dataLayout->addWidget(m_openTrajectoryButton, 0, 1);
+        dataLayout->addWidget(m_selectModelButton, 1, 0);
+        dataLayout->addWidget(m_selectTrajectoryButton, 1, 1);
+        dataLayout->addWidget(new QLabel(QStringLiteral("Saved trajectory source"), dataGroup), 2, 0);
+        dataLayout->addWidget(m_savedTrajectorySourceCombo, 2, 1);
+        dataLayout->addWidget(m_loadSavedTrajectoryButton, 3, 0, 1, 2);
         rootLayout->addWidget(dataGroup);
         m_sharedSections.push_back(dataGroup);
         connect(m_openModelButton, &QPushButton::clicked,
             this, &CoatingAnalysisPanel::openModelRequested);
         connect(m_openTrajectoryButton, &QPushButton::clicked,
             this, &CoatingAnalysisPanel::openTrajectoryRequested);
+        connect(m_loadSavedTrajectoryButton, &QPushButton::clicked,
+            this, &CoatingAnalysisPanel::loadSavedTrajectoryRequested);
         connect(m_selectModelButton, &QPushButton::clicked,
             this, &CoatingAnalysisPanel::selectModelFileRequested);
         connect(m_selectTrajectoryButton, &QPushButton::clicked,
@@ -1039,6 +1047,71 @@ namespace robot_qt_viewer
         m_onlineAlgorithmCombo = new QComboBox(onlineGroup);
         m_onlineAlgorithmCombo->addItem(QStringLiteral("Paper Gaussian (GPU)"),
             static_cast<int>(spraythickness::ThicknessModelKind::PaperGaussian));
+        m_onlinePoseSourceCombo = new QComboBox(onlineGroup);
+        m_onlinePoseSourceCombo->addItem(QStringLiteral("Virtual validation"),
+            static_cast<int>(OnlinePoseSource::Virtual));
+        m_onlinePoseSourceCombo->addItem(QStringLiteral("Live RWS"),
+            static_cast<int>(OnlinePoseSource::LiveRws));
+        m_onlineMotionCombo = new QComboBox(onlineGroup);
+        m_onlineMotionCombo->addItem(QStringLiteral("Fixed gun / rotating workpiece"),
+            static_cast<int>(OnlineVirtualMotion::RotatingWorkpiece));
+        m_onlineMotionCombo->addItem(QStringLiteral("Fixed workpiece / moving gun"),
+            static_cast<int>(OnlineVirtualMotion::MovingGun));
+        m_onlineRotationOptions = new QWidget(onlineGroup);
+        auto* rotationForm = new QFormLayout(m_onlineRotationOptions);
+        rotationForm->setContentsMargins(0, 0, 0, 0);
+        m_onlineRotationAxisCombo = new QComboBox(m_onlineRotationOptions);
+        m_onlineRotationAxisCombo->addItems({ QStringLiteral("X"),
+            QStringLiteral("Y"), QStringLiteral("Z") });
+        m_onlineRotationAxisCombo->setCurrentIndex(2);
+        m_onlineRpmSpinBox = new QDoubleSpinBox(m_onlineRotationOptions);
+        m_onlineRpmSpinBox->setRange(-1000.0, 1000.0);
+        m_onlineRpmSpinBox->setValue(30.0);
+        m_onlineRpmSpinBox->setSuffix(QStringLiteral(" rpm"));
+        rotationForm->addRow(QStringLiteral("Rotation axis"),
+            m_onlineRotationAxisCombo);
+        rotationForm->addRow(QStringLiteral("Rotation speed"), m_onlineRpmSpinBox);
+        m_onlineGunOptions = new QWidget(onlineGroup);
+        auto* gunForm = new QFormLayout(m_onlineGunOptions);
+        gunForm->setContentsMargins(0, 0, 0, 0);
+        m_onlineGunEndOptions = new QWidget(onlineGroup);
+        auto* gunEndForm = new QFormLayout(m_onlineGunEndOptions);
+        gunEndForm->setContentsMargins(0, 0, 0, 0);
+        for(int axis = 0; axis < 3; ++axis) {
+            m_onlineGunStartSpinBoxes[axis] = new QDoubleSpinBox(m_onlineGunOptions);
+            m_onlineGunEndSpinBoxes[axis] = new QDoubleSpinBox(m_onlineGunEndOptions);
+            for(QDoubleSpinBox* spin : { m_onlineGunStartSpinBoxes[axis],
+                     m_onlineGunEndSpinBoxes[axis] }) {
+                spin->setRange(-100000.0, 100000.0);
+                spin->setDecimals(2);
+                spin->setSuffix(QStringLiteral(" mm"));
+            }
+        }
+        m_onlineGunStartSpinBoxes[2]->setValue(110.0);
+        m_onlineGunEndSpinBoxes[0]->setValue(50.0);
+        m_onlineGunEndSpinBoxes[2]->setValue(110.0);
+        m_onlineGunSpeedSpinBox = new QDoubleSpinBox(m_onlineGunEndOptions);
+        m_onlineGunSpeedSpinBox->setRange(0.01, 10000.0);
+        m_onlineGunSpeedSpinBox->setValue(50.0);
+        m_onlineGunSpeedSpinBox->setSuffix(QStringLiteral(" mm/s"));
+        for(int axis = 0; axis < 3; ++axis) {
+            const QString suffix = QStringLiteral(" %1").arg(
+                QStringLiteral("XYZ").at(axis));
+            gunForm->addRow(QStringLiteral("Start") + suffix,
+                m_onlineGunStartSpinBoxes[axis]);
+            gunEndForm->addRow(QStringLiteral("End") + suffix,
+                m_onlineGunEndSpinBoxes[axis]);
+        }
+        gunEndForm->addRow(QStringLiteral("Gun speed"), m_onlineGunSpeedSpinBox);
+        m_onlineVirtualOptions = new QWidget(onlineGroup);
+        auto* virtualLayout = new QVBoxLayout(m_onlineVirtualOptions);
+        virtualLayout->setContentsMargins(0, 0, 0, 0);
+        auto* virtualForm = new QFormLayout();
+        virtualForm->addRow(QStringLiteral("Virtual motion"), m_onlineMotionCombo);
+        virtualLayout->addLayout(virtualForm);
+        virtualLayout->addWidget(m_onlineGunOptions);
+        virtualLayout->addWidget(m_onlineRotationOptions);
+        virtualLayout->addWidget(m_onlineGunEndOptions);
         m_onlineSprayDirectionCombo = new QComboBox(onlineGroup);
         m_onlinePowderFeedDirectionCombo = new QComboBox(onlineGroup);
         populateLocalAxisCombo(*m_onlineSprayDirectionCombo, PositiveZ);
@@ -1051,21 +1124,28 @@ namespace robot_qt_viewer
         m_onlineHistoryCheckBox->setChecked(true);
         auto* onlineForm = new QFormLayout();
         onlineForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+        onlineForm->addRow(QStringLiteral("Pose source"), m_onlinePoseSourceCombo);
         onlineForm->addRow(QStringLiteral("Model"), m_onlineAlgorithmCombo);
         onlineForm->addRow(QStringLiteral("Spray direction"),
             m_onlineSprayDirectionCombo);
         onlineForm->addRow(QStringLiteral("Powder feed direction"),
             m_onlinePowderFeedDirectionCombo);
         onlineLayout->addLayout(onlineForm);
+        onlineLayout->addWidget(m_onlineVirtualOptions);
         onlineLayout->addWidget(m_onlineBvhCheckBox);
         onlineLayout->addWidget(m_onlineHistoryCheckBox);
         auto* onlineButtons = new QHBoxLayout();
-        m_onlineStartButton = new QPushButton(QStringLiteral("Start powder (software)"), onlineGroup);
-        m_onlineStopButton = new QPushButton(QStringLiteral("Stop powder (software)"), onlineGroup);
+        m_onlineStartButton = new QPushButton(QStringLiteral("Start spraying"), onlineGroup);
+        m_onlineStopButton = new QPushButton(QStringLiteral("Stop spraying"), onlineGroup);
+        m_onlineStartButton->setToolTip(QStringLiteral(
+            "Controls thickness accumulation only; no equipment command is sent."));
+        m_onlineStopButton->setToolTip(m_onlineStartButton->toolTip());
+        m_onlineResetButton = new QPushButton(QStringLiteral("Reset thickness"), onlineGroup);
         onlineButtons->addWidget(m_onlineStartButton);
         onlineButtons->addWidget(m_onlineStopButton);
         onlineLayout->addLayout(onlineButtons);
-        m_onlineStatusLabel = new QLabel(QStringLiteral("Waiting for live RWS poses."), onlineGroup);
+        onlineLayout->addWidget(m_onlineResetButton);
+        m_onlineStatusLabel = new QLabel(QStringLiteral("Ready to start online prediction."), onlineGroup);
         m_onlineStatusLabel->setWordWrap(true);
         onlineLayout->addWidget(m_onlineStatusLabel);
         rootLayout->addWidget(onlineGroup);
@@ -1087,6 +1167,26 @@ namespace robot_qt_viewer
             this, &CoatingAnalysisPanel::onlineSprayStartRequested);
         connect(m_onlineStopButton, &QPushButton::clicked,
             this, &CoatingAnalysisPanel::onlineSprayStopRequested);
+        connect(m_onlineResetButton, &QPushButton::clicked,
+            this, &CoatingAnalysisPanel::onlineResetRequested);
+        connect(m_onlinePoseSourceCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, [this](int) { updateOnlineInputUi(); emit onlineInputChanged(); });
+        connect(m_onlineMotionCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, [this](int) { updateOnlineInputUi(); emit onlineInputChanged(); });
+        connect(m_onlineRotationAxisCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, [this](int) { emit onlineInputChanged(); });
+        connect(m_onlineRpmSpinBox, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+            this, [this](double) { emit onlineInputChanged(); });
+        for(int axis = 0; axis < 3; ++axis) {
+            for(QDoubleSpinBox* spin : { m_onlineGunStartSpinBoxes[axis],
+                     m_onlineGunEndSpinBoxes[axis] }) {
+                connect(spin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+                    this, [this](double) { emit onlineInputChanged(); });
+            }
+        }
+        connect(m_onlineGunSpeedSpinBox, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+            this, [this](double) { emit onlineInputChanged(); });
+        updateOnlineInputUi();
 
         auto* modeGroup = new QGroupBox(QStringLiteral("Prediction Input"), this);
         auto* modeLayout = new QVBoxLayout(modeGroup);
@@ -1484,6 +1584,23 @@ namespace robot_qt_viewer
         m_onlineStatusLabel->setText(coatingAnalysisTranslate(m_languageCode, status));
         m_onlineStartButton->setEnabled(!spraying);
         m_onlineStopButton->setEnabled(spraying);
+        updateOnlineInputUi();
+    }
+
+    void CoatingAnalysisPanel::updateOnlineInputUi()
+    {
+        const bool virtualSource = onlinePoseSource() == OnlinePoseSource::Virtual;
+        const bool rotating = onlineVirtualMotion()
+            == OnlineVirtualMotion::RotatingWorkpiece;
+        m_onlineVirtualOptions->setVisible(virtualSource);
+        m_onlineRotationOptions->setVisible(virtualSource && rotating);
+        m_onlineGunEndOptions->setVisible(virtualSource && !rotating);
+        m_onlinePoseSourceCombo->setEnabled(!m_onlineActive);
+        m_onlineMotionCombo->setEnabled(!m_onlineActive);
+        m_onlineRotationAxisCombo->setEnabled(!m_onlineActive);
+        m_onlineRpmSpinBox->setEnabled(!m_onlineActive);
+        m_onlineVirtualOptions->setEnabled(!m_onlineActive);
+        m_onlineResetButton->setEnabled(m_onlineActive && !m_onlineSpraying);
     }
 
     void CoatingAnalysisPanel::setModeTab(int index)
@@ -1659,11 +1776,12 @@ namespace robot_qt_viewer
         }
         m_workpieceCombo->setEnabled(
             !viewModel.workpieces.isEmpty() && !viewModel.predictionRunning
-            && !(m_mode == CoatingAnalysisMode::Online && m_onlineActive));
+            && m_mode != CoatingAnalysisMode::Online);
         const bool standardControlsEnabled = !viewModel.predictionRunning
             && !viewModel.simulationActive;
         m_openModelButton->setEnabled(standardControlsEnabled);
         m_openTrajectoryButton->setEnabled(standardControlsEnabled);
+        m_loadSavedTrajectoryButton->setEnabled(standardControlsEnabled);
         m_selectModelButton->setEnabled(standardControlsEnabled);
         m_selectTrajectoryButton->setEnabled(standardControlsEnabled);
         m_savedTrajectorySourceCombo->setEnabled(
@@ -1689,6 +1807,7 @@ namespace robot_qt_viewer
         m_onlinePowderFeedDirectionCombo->setEnabled(!m_onlineActive);
         m_onlineBvhCheckBox->setEnabled(!m_onlineActive);
         m_onlineHistoryCheckBox->setEnabled(!m_onlineActive);
+        updateOnlineInputUi();
         m_onlineStartButton->setEnabled(!m_onlineSpraying
             && !viewModel.predictionRunning && !viewModel.reproductionRunning);
         m_onlineStopButton->setEnabled(m_onlineSpraying);
@@ -2043,6 +2162,45 @@ namespace robot_qt_viewer
         return m_onlineHistoryCheckBox->isChecked();
     }
 
+    OnlinePoseSource CoatingAnalysisPanel::onlinePoseSource() const
+    {
+        return static_cast<OnlinePoseSource>(m_onlinePoseSourceCombo->currentData().toInt());
+    }
+
+    OnlineVirtualMotion CoatingAnalysisPanel::onlineVirtualMotion() const
+    {
+        return static_cast<OnlineVirtualMotion>(m_onlineMotionCombo->currentData().toInt());
+    }
+
+    Eigen::Vector3d CoatingAnalysisPanel::onlineRotationAxis() const
+    {
+        return Eigen::Vector3d::Unit(m_onlineRotationAxisCombo->currentIndex());
+    }
+
+    double CoatingAnalysisPanel::onlineRotationRpm() const
+    {
+        return m_onlineRpmSpinBox->value();
+    }
+
+    Eigen::Vector3d CoatingAnalysisPanel::onlineGunStartOffsetMeters() const
+    {
+        return Eigen::Vector3d(m_onlineGunStartSpinBoxes[0]->value(),
+            m_onlineGunStartSpinBoxes[1]->value(),
+            m_onlineGunStartSpinBoxes[2]->value()) * 0.001;
+    }
+
+    Eigen::Vector3d CoatingAnalysisPanel::onlineGunEndOffsetMeters() const
+    {
+        return Eigen::Vector3d(m_onlineGunEndSpinBoxes[0]->value(),
+            m_onlineGunEndSpinBoxes[1]->value(),
+            m_onlineGunEndSpinBoxes[2]->value()) * 0.001;
+    }
+
+    double CoatingAnalysisPanel::onlineGunSpeedMetersPerSecond() const
+    {
+        return m_onlineGunSpeedSpinBox->value() * 0.001;
+    }
+
     void CoatingAnalysisPanel::ensurePowderFeedDirectionValid()
     {
         if(std::abs(sprayDirectionLocal().dot(powderFeedDirectionLocal())) < 0.5) {
@@ -2102,9 +2260,10 @@ namespace robot_qt_viewer
                 == spraythickness::ReproductionAlgorithmKind::Fuke2005) {
                 text = QStringLiteral("Select Surface Mesh");
             }
-            m_selectModelButton->setText(
-                coatingAnalysisTranslate(m_languageCode, text));
-            m_selectModelButton->setToolTip(translate(profile.modelDialogTitle));
+            m_selectModelButton->setText(coatingAnalysisTranslate(
+                m_languageCode, QStringLiteral("Select Model File")));
+            m_selectModelButton->setToolTip(coatingAnalysisTranslate(
+                m_languageCode, QStringLiteral("Choose a workpiece model file.")));
             m_reproductionSelectModelButton->setText(
                 coatingAnalysisTranslate(m_languageCode, text));
             m_reproductionSelectModelButton->setToolTip(
@@ -2115,10 +2274,10 @@ namespace robot_qt_viewer
                     == spraythickness::ReproductionAlgorithmKind::Fuke2005
                 ? QStringLiteral("Select Pose Sequence")
                 : QStringLiteral("Select Trajectory File");
-            m_selectTrajectoryButton->setText(
-                coatingAnalysisTranslate(m_languageCode, text));
-            m_selectTrajectoryButton->setToolTip(
-                translate(profile.trajectoryDialogTitle));
+            m_selectTrajectoryButton->setText(coatingAnalysisTranslate(
+                m_languageCode, QStringLiteral("Select Trajectory File")));
+            m_selectTrajectoryButton->setToolTip(coatingAnalysisTranslate(
+                m_languageCode, QStringLiteral("Choose a spray trajectory file.")));
             m_reproductionSelectTrajectoryButton->setText(
                 coatingAnalysisTranslate(m_languageCode, text));
             m_reproductionSelectTrajectoryButton->setToolTip(

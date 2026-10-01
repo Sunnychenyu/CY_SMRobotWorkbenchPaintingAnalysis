@@ -18,6 +18,7 @@
 #include <vector>
 
 class QMenu;
+class QTimer;
 
 namespace spraytrajectory
 {
@@ -130,8 +131,11 @@ namespace robot_qt_viewer
         void predictThickness();
         void startOnlineSpray();
         void stopOnlineSpray();
+        void finishOnlineSpray(bool includeStopSample);
         void resetOnlinePrediction();
         void handleLiveRobotPose(const RobotQtViewerEvent& event);
+        void advanceVirtualOnlineSpray();
+        void updateOnlinePoseDisplay();
         void flushOnlineTrajectory();
         void handleOnlineField(const spraythickness::ThicknessPredictionResult& result);
         void setCurrentResultAsReference();
@@ -321,7 +325,7 @@ namespace robot_qt_viewer
         QHash<QString, bool> m_reproductionModelVisibility;
         QHash<QString, bool> m_onlineModelVisibility;
         QString m_predictionStatus;
-        QString m_onlineStatus{ QStringLiteral("Waiting for live RWS poses.") };
+        QString m_onlineStatus{ QStringLiteral("Ready to start online prediction.") };
         struct OnlineObject
         {
             QString id;
@@ -334,6 +338,20 @@ namespace robot_qt_viewer
         Eigen::Isometry3d m_liveGunPose = Eigen::Isometry3d::Identity();
         Eigen::Isometry3d m_liveTablePose = Eigen::Isometry3d::Identity();
         Eigen::Isometry3d m_onlineInitialTablePose = Eigen::Isometry3d::Identity();
+        Eigen::Isometry3d m_onlineCurrentTablePose = Eigen::Isometry3d::Identity();
+        Eigen::Isometry3d m_onlineCurrentGunPose = Eigen::Isometry3d::Identity();
+        Eigen::Vector3d m_onlineVirtualCenter = Eigen::Vector3d::Zero();
+        Eigen::Vector3d m_onlineVirtualAxis = Eigen::Vector3d::UnitZ();
+        Eigen::Vector3d m_onlineVirtualGunStart = Eigen::Vector3d::Zero();
+        Eigen::Vector3d m_onlineVirtualGunEnd = Eigen::Vector3d::Zero();
+        double m_onlineVirtualRpm = 0.0;
+        double m_onlineVirtualGunSpeed = 0.0;
+        double m_onlineVirtualTimeSeconds = 0.0;
+        double m_onlineVirtualRunBaseSeconds = 0.0;
+        std::chrono::steady_clock::time_point m_onlineVirtualRunStartedAt{};
+        int m_onlineVirtualStepIndex = 0;
+        bool m_onlineVirtualSource = false;
+        bool m_onlineVirtualRotating = true;
         QString m_liveGunRobotId;
         QString m_liveTableRobotId;
         QString m_onlineGunRobotId;
@@ -346,5 +364,7 @@ namespace robot_qt_viewer
         bool m_onlineSpraying = false;
         bool m_onlineShowThickness = true;
         bool m_onlinePickEnabled = false;
+        QTimer* m_onlinePoseWatchdog = nullptr;
+        QTimer* m_onlineVirtualTimer = nullptr;
     };
 }
