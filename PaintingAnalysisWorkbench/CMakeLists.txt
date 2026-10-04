@@ -44,6 +44,8 @@ set(SOURCES
     ThicknessPredictionJobController.h
     OnlineThicknessPredictionJobController.cpp
     OnlineThicknessPredictionJobController.h
+    OnlinePredictionDiagnostics.cpp
+    OnlinePredictionDiagnostics.h
     OnlineVirtualMotion.cpp
     ThicknessUniformityAnalysis.cpp
     ThicknessUniformityAnalysis.h
@@ -104,6 +106,9 @@ if(BuildTests)
     add_subdirectory(
         regression/OnlineVirtualMotionTest
         ${PROJECT_BINARY_DIR}/tests/online_virtual_motion)
+    add_subdirectory(
+        regression/OnlinePredictionStreamingTest
+        ${PROJECT_BINARY_DIR}/tests/online_prediction_streaming)
 endif()
 
 if(ExportPacakge${PACKAGE_NAME})

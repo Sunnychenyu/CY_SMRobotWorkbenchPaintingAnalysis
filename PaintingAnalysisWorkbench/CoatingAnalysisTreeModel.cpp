@@ -107,13 +107,25 @@ namespace robot_qt_viewer
                 (metrics.minThickness == m_thicknessMetrics.minThickness &&
                     metrics.maxThickness == m_thicknessMetrics.maxThickness &&
                     metrics.averageThickness == m_thicknessMetrics.averageThickness &&
-                    metrics.coverageRatio == m_thicknessMetrics.coverageRatio))) {
+                    metrics.coverageRatio == m_thicknessMetrics.coverageRatio &&
+                    metrics.underCoatedRatio == m_thicknessMetrics.underCoatedRatio &&
+                    metrics.overCoatedRatio == m_thicknessMetrics.overCoatedRatio))) {
             return;
         }
-        beginResetModel();
+        const QModelIndex parent = index(ThicknessRow, 0, QModelIndex());
+        const bool structureChanged = hasThickness != m_hasThickness;
+        if(structureChanged) {
+            if(hasThickness) beginInsertRows(parent, 0, 5);
+            else beginRemoveRows(parent, 0, 5);
+        }
         m_hasThickness = hasThickness;
         m_thicknessMetrics = metrics;
-        endResetModel();
+        if(structureChanged) {
+            if(hasThickness) endInsertRows();
+            else endRemoveRows();
+        } else {
+            emit dataChanged(index(0, 0, parent), index(5, 0, parent), { Qt::DisplayRole });
+        }
     }
 
     void CoatingAnalysisTreeModel::setWaypoints(

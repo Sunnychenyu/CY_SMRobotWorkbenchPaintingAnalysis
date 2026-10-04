@@ -25,4 +25,9 @@ namespace robot_qt_viewer
         const spraythickness::ThicknessField& field,
         double minimumThicknessMeters,
         double maximumThicknessMeters);
+
+    ThicknessUniformityStatistics calculateThicknessUniformityStatistics(
+        const spraythickness::OnlineThicknessSnapshot& snapshot,
+        double minimumThicknessMeters,
+        double maximumThicknessMeters);
 }

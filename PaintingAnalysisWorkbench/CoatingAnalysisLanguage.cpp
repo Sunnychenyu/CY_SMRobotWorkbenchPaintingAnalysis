@@ -208,6 +208,59 @@ namespace robot_qt_viewer
                 {"Selected local vertices + candidate spray points/vertices + complete-model occlusion BVH", "选定局部顶点 + 候选喷涂点/顶点 + 完整模型遮挡 BVH"},
                 {"Paper Gaussian (GPU)", "论文高斯模型（GPU）"},
                 {"Online Thickness", "在线厚度预测"},
+                {"Scene submission rate:", "场景提交帧率："},
+                {"Viewport draw rate:", "视口绘制帧率："},
+                {"Cloud submission rate:", "云图提交帧率："},
+                {"Frame interval P95:", "帧间隔 P95："},
+                {"Longest frame interval:", "最长帧间隔："},
+                {"Screen refresh rate:", "屏幕刷新率："},
+                {"Timing detection:not started", "耗时检测：尚未开始"},
+                {"Timing detection:running", "耗时检测：运行中"},
+                {"Timing detection:stopped", "耗时检测：已结束"},
+                {"Timing anomalies:", "耗时异常数："},
+                {"Waiting for timing samples...", "等待耗时采样…"},
+                {"Startup / warm-up:", "启动／预热耗时："},
+                {"Last long frame:", "最近异常帧间隔："},
+                {"Current wait:", "当前持续等待："},
+                {"Suspected stage:", "疑似耗时环节："},
+                {"; recent ", "；近期平均 "},
+                {"Diagnostic CSV:", "诊断 CSV："},
+                {"Diagnostic write failed:", "诊断文件写入失败："},
+                {"Dropped diagnostic rows:", "未写入的诊断行数："},
+                {"Input sampling / submission", "输入采样／提交"},
+                {"Input backlog / worker queue", "输入积压／后台排队"},
+                {"Backend CPU preparation", "后台 CPU 准备"},
+                {"GPU input upload", "GPU 输入上传"},
+                {"Compute submission", "计算指令提交"},
+                {"GPU compute", "GPU 计算"},
+                {"GPU wait / thickness readback", "GPU 等待／厚度回读"},
+                {"GPU backend accumulation / readback", "GPU 后台累计／回读"},
+                {"Thickness conversion", "厚度结果转换"},
+                {"GPU timer result wait", "GPU 计时结果等待"},
+                {"Uniformity statistics", "均匀性统计"},
+                {"Cloud mapping", "云图顶点映射"},
+                {"GUI event delivery", "界面事件投递"},
+                {"Previous frame presentation", "上一帧呈现等待"},
+                {"Display pacing", "显示节奏等待"},
+                {"GUI result handling", "界面结果接收／处理"},
+                {"Pose submission", "位姿提交"},
+                {"Cloud conversion / upload / copy", "云图转换／上传／复制"},
+                {"Information / legend update", "信息栏／标尺更新"},
+                {"Repaint scheduling wait", "重绘调度等待"},
+                {"Scene update", "场景更新"},
+                {"Draw submission", "绘制指令提交"},
+                {"Qt swap / compositor wait", "Qt 帧交换／窗口合成等待"},
+                {"GUI event loop delay", "界面事件循环延迟"},
+                {"Model / GUI startup", "模型／界面启动准备"},
+                {"Compute context startup", "计算上下文创建"},
+                {"BVH / initial GPU preparation", "BVH／GPU 初始数据准备"},
+                {"Unmeasured scheduling / input wait", "未归属的调度／输入等待"},
+                {"Suspected stages are timing evidence, not a verified root cause. GPU compute overlaps readback wait; do not add all stage times together.",
+                    "疑似环节由耗时推断，仍需结合日志确认原因。GPU 计算与回读等待有重叠，各阶段耗时不能直接相加。"},
+                {"Rates count Qt window submissions and draw calls, not physical screen frames. Frame intervals reveal pauses hidden by average rates.", "帧率统计的是 Qt 窗口提交和绘制次数，并非屏幕实际显示帧数。帧间隔可反映平均帧率掩盖的停顿。"},
+                {"First cloud frame:", "首张云图耗时："},
+                {"Waiting for first cloud frame...", "等待首张云图…"},
+                {"Not started", "尚未开始"},
                 {"Load the debug model in Thickness Prediction first.",
                     "请先在厚度预测中加载调试模型。"},
                 {"Pose source", "位姿来源"},
@@ -218,6 +271,10 @@ namespace robot_qt_viewer
                 {"Fixed workpiece / moving gun", "零件固定 / 喷枪移动"},
                 {"Rotation axis", "旋转轴"},
                 {"Rotation speed", "旋转速度"},
+                {"Random (changing axis)", "随机（轴持续变化）"},
+                {"Axis direction changes smoothly every 2 s.", "轴方向每 2 秒平滑转向新的随机方向。"},
+                {"Current axis: ", "当前轴方向："},
+                {"Random seed: ", "随机种子："},
                 {"Start X", "起点 X"},
                 {"Start Y", "起点 Y"},
                 {"Start Z", "起点 Z"},
@@ -490,22 +547,25 @@ namespace robot_qt_viewer
     {
         const bool chinese = languageCode.toLower().startsWith(QStringLiteral("zh"));
         QString result = text;
-        const auto& dictionary = entries();
-        QVector<const TranslationEntry*> ordered;
-        ordered.reserve(dictionary.size());
-        for(const TranslationEntry& entry : dictionary) {
-            ordered.push_back(&entry);
-        }
-        std::sort(ordered.begin(), ordered.end(), [](const TranslationEntry* left,
-            const TranslationEntry* right) {
-            return std::char_traits<char>::length(left->english)
-                > std::char_traits<char>::length(right->english);
-        });
-        for(const TranslationEntry* entry : ordered) {
-            const QString source = QString::fromUtf8(
-                chinese ? entry->english : entry->chinese);
-            const QString target = QString::fromUtf8(
-                chinese ? entry->chinese : entry->english);
+        // Build and order the immutable dictionary once, not on every UI reading.
+        static const auto ordered = [] {
+            QVector<const TranslationEntry*> pointers;
+            for(const TranslationEntry& entry : entries()) pointers.push_back(&entry);
+            std::sort(pointers.begin(), pointers.end(), [](const auto* left, const auto* right) {
+                return std::char_traits<char>::length(left->english)
+                    > std::char_traits<char>::length(right->english);
+            });
+            QVector<QPair<QString, QString>> strings;
+            strings.reserve(pointers.size());
+            for(const auto* entry : pointers) {
+                strings.push_back({ QString::fromUtf8(entry->english),
+                    QString::fromUtf8(entry->chinese) });
+            }
+            return strings;
+        }();
+        for(const auto& entry : ordered) {
+            const QString& source = chinese ? entry.first : entry.second;
+            const QString& target = chinese ? entry.second : entry.first;
             if(!source.isEmpty()) {
                 result.replace(source, target);
             }

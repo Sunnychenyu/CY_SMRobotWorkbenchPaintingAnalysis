@@ -50,6 +50,12 @@ namespace robot_qt_viewer
         m_model->setWaypoints(waypoints);
     }
 
+    void CoatingAnalysisTreePanel::applyThicknessInfo(
+        bool hasThickness, const spraythickness::ThicknessMetrics& metrics)
+    {
+        m_model->setThickness(hasThickness, metrics);
+    }
+
     void CoatingAnalysisTreePanel::showContextMenu(const QPoint& position)
     {
         const QModelIndex index = m_treeView->indexAt(position);

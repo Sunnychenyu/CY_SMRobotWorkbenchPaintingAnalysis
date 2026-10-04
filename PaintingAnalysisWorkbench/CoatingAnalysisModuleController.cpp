@@ -44,11 +44,15 @@
 #include <QFileDialog>
 #include <QFile>
 #include <QFileInfo>
+#include <QGuiApplication>
 #include <QMenu>
 #include <QMessageBox>
+#include <QRandomGenerator>
 #include <QSettings>
+#include <QScreen>
 #include <QTextStream>
 #include <QTimer>
+#include <QWindow>
 
 #include <Eigen/Geometry>
 
@@ -65,7 +69,6 @@
 namespace
 {
     constexpr double kMetersToMicrometers = 1.0e6;
-    constexpr double kOnlineVirtualStepSeconds = 0.02;
     constexpr double kValidationActiveThicknessMeters = 1.0e-12;
     const QString kFixedModelPath = QStringLiteral(
         "K:/rs2026/data/ThickPredictData/STL/libing/yangjian_2_0.02.STL");
@@ -520,6 +523,13 @@ namespace robot_qt_viewer
         constexpr const char* kReproductionPlateStackObjectId =
             "__coating_reproduction_plate_stack__";
     }
+    struct CoatingAnalysisModuleController::PendingOnlineDisplay
+    {
+        std::shared_ptr<const spraythickness::OnlineThicknessSnapshot> result;
+        ThicknessUniformityStatistics uniformity;
+        OnlinePredictionFrame frame;
+    };
+
     struct CoatingAnalysisModuleController::AxisymmetricProfileState
     {
         spraythickness::opengl::AxisymmetricProfileSlice slice;
@@ -543,6 +553,7 @@ namespace robot_qt_viewer
         , m_context(context)
         , m_predictionJob(std::make_unique<ThicknessPredictionJobController>())
         , m_onlineJob(std::make_unique<OnlineThicknessPredictionJobController>())
+        , m_onlineDiagnostics(std::make_unique<OnlinePredictionDiagnostics>())
         , m_reproductionJob(
               std::make_unique<AlgorithmReproductionJobController>())
         , m_axisymmetricProfile(std::make_unique<AxisymmetricProfileState>())
@@ -567,9 +578,19 @@ namespace robot_qt_viewer
             emit statusMessageRequested(m_status, 5000);
         });
         m_onlineVirtualTimer = new QTimer(this);
-        m_onlineVirtualTimer->setInterval(20);
+        m_onlineVirtualTimer->setTimerType(Qt::PreciseTimer);
+        m_onlineVirtualTimer->setInterval(8);
         connect(m_onlineVirtualTimer, &QTimer::timeout,
             this, &CoatingAnalysisModuleController::advanceVirtualOnlineSpray);
+        m_onlineRefreshTimer = new QTimer(this);
+        m_onlineRefreshTimer->setInterval(1000);
+        connect(m_onlineRefreshTimer, &QTimer::timeout,
+            this, &CoatingAnalysisModuleController::updateOnlineRefreshStatistics);
+        m_onlineDiagnosticTimer = new QTimer(this);
+        m_onlineDiagnosticTimer->setTimerType(Qt::PreciseTimer);
+        m_onlineDiagnosticTimer->setInterval(20);
+        connect(m_onlineDiagnosticTimer, &QTimer::timeout, this,
+            [this]() { m_onlineDiagnostics->heartbeat(); });
         connect(&m_panel, &CoatingAnalysisPanel::openModelRequested,
             this, &CoatingAnalysisModuleController::openModelFromDialog);
         connect(&m_panel, &CoatingAnalysisPanel::openTrajectoryRequested,
@@ -915,6 +936,7 @@ namespace robot_qt_viewer
             this, &CoatingAnalysisModuleController::handleOnlineField);
         connect(m_onlineJob.get(), &OnlineThicknessPredictionJobController::predictionFailed,
             this, [this](const QString& error) {
+                m_onlineDiagnostics->event(QStringLiteral("FAILED"), 0.0, error);
                 resetOnlinePrediction();
                 m_onlineStatus = QStringLiteral("Online prediction failed: ") + error;
                 if(onlineModeActive()) {
@@ -1262,7 +1284,10 @@ namespace robot_qt_viewer
         }
     }
 
-    CoatingAnalysisModuleController::~CoatingAnalysisModuleController() = default;
+    CoatingAnalysisModuleController::~CoatingAnalysisModuleController()
+    {
+        m_onlineDiagnostics->finish(QStringLiteral("application shutdown"));
+    }
 
     const std::vector<spraytrajectory::SprayPathPoint>&
     CoatingAnalysisModuleController::waypoints() const
@@ -1456,7 +1481,7 @@ namespace robot_qt_viewer
         thicknessAction->setChecked(onlineModeActive()
             ? m_onlineShowThickness : m_session.showThickness);
         thicknessAction->setEnabled(onlineModeActive()
-            ? !m_onlineResult.field.empty() : m_session.hasResult);
+            ? (m_onlineResult && !m_onlineResult->empty()) : m_session.hasResult);
         connect(thicknessAction, &QAction::toggled,
             this, &CoatingAnalysisModuleController::setShowThickness);
 
@@ -1466,7 +1491,7 @@ namespace robot_qt_viewer
         thicknessPickAction->setChecked(onlineModeActive()
             ? m_onlinePickEnabled : m_session.thicknessPickEnabled);
         thicknessPickAction->setEnabled(onlineModeActive()
-            ? (!m_onlineResult.field.empty() && m_onlineShowThickness)
+            ? ((m_onlineResult && !m_onlineResult->empty()) && m_onlineShowThickness)
             : (m_session.hasResult && m_session.showThickness));
         connect(thicknessPickAction, &QAction::toggled,
             this, &CoatingAnalysisModuleController::setThicknessPickEnabled);
@@ -2239,6 +2264,17 @@ namespace robot_qt_viewer
                 || m_liveTableRobotId != m_onlineTableRobotId)))) {
             resetOnlinePrediction();
         }
+        m_onlineSprayRequestedAt = std::chrono::steady_clock::now();
+        m_onlineDiagnosticStartedAt = m_onlineSprayRequestedAt;
+        m_onlineLastInputSubmittedAt = {};
+        m_onlineGuiStartupMilliseconds = 0.0;
+        m_onlineDiagnosticFrameEligible = false;
+        m_onlineDiagnostics->begin(QStringLiteral("source=%1; occlusion=%2; thermal_history=%3; screen_hz=%4")
+            .arg(virtualSource ? QStringLiteral("virtual") : QStringLiteral("RWS"))
+            .arg(m_panel.onlineBvhOcclusionEnabled()).arg(m_panel.onlineHistoryCorrectionEnabled())
+            .arg(m_onlineScreenRefreshRate));
+        m_onlineDiagnosticTimer->start();
+        m_panel.setOnlineDiagnostics(m_onlineDiagnostics->summary(), m_onlineDiagnostics->filePath());
         if(!m_onlineActive) {
             const simulation_project::SceneObjectDesc* selected =
                 findObject(m_context.document(), m_session.objectId);
@@ -2246,6 +2282,9 @@ namespace robot_qt_viewer
                 m_status = QStringLiteral("Select a workpiece for online prediction.");
                 m_onlineStatus = m_status;
                 m_panel.setOnlinePredictionState(false, false, m_status);
+                m_onlineDiagnostics->finish(QStringLiteral("no selected workpiece"));
+                m_onlineDiagnosticTimer->stop();
+                m_panel.setOnlineDiagnostics(m_onlineDiagnostics->summary(), m_onlineDiagnostics->filePath());
                 return;
             }
             try {
@@ -2321,11 +2360,25 @@ namespace robot_qt_viewer
                     maximum = maximum.cwiseMax(sample.position);
                 }
                 m_onlineVirtualCenter = 0.5 * (minimum + maximum);
+                m_onlineIntegrationSampling.configure(minimum, maximum,
+                    std::min(task.options.deposition.sigmaPhiRadians,
+                        task.options.deposition.sigmaPsiRadians));
                 m_onlineVirtualSource = virtualSource;
                 m_onlineVirtualRotating = m_panel.onlineVirtualMotion()
                     == OnlineVirtualMotion::RotatingWorkpiece;
                 m_onlineVirtualAxis = m_panel.onlineRotationAxis();
                 m_onlineVirtualRpm = m_panel.onlineRotationRpm();
+                m_onlineVirtualRandomAxis = virtualSource && m_onlineVirtualRotating
+                    && m_panel.onlineRandomRotationAxisEnabled();
+                if(m_onlineVirtualRandomAxis) {
+                    m_onlineRandomRotation.reset(m_onlineVirtualCenter,
+                        m_onlineVirtualRpm, QRandomGenerator::global()->generate());
+                    m_onlineVirtualAxis = m_onlineRandomRotation.axis();
+                    LOG_INFO("rs2026") << "Online random rotation: seed="
+                        << m_onlineRandomRotation.seed() << ", rpm=" << m_onlineVirtualRpm
+                        << ", center=" << m_onlineVirtualCenter.transpose();
+                }
+                m_onlineDisplayedRotationAxis = m_onlineVirtualAxis;
                 m_onlineVirtualGunStart = m_panel.onlineGunStartOffsetMeters();
                 m_onlineVirtualGunEnd = m_panel.onlineGunEndOffsetMeters();
                 m_onlineVirtualGunSpeed = m_panel.onlineGunSpeedMetersPerSecond();
@@ -2336,7 +2389,6 @@ namespace robot_qt_viewer
                         "Set distinct gun start and end offsets for virtual movement.");
                 }
                 m_onlineVirtualTimeSeconds = 0.0;
-                m_onlineVirtualStepIndex = 0;
                 m_onlineCurrentTablePose = virtualSource
                     ? Eigen::Isometry3d::Identity() : m_liveTablePose;
                 m_onlineCurrentGunPose = virtualSource
@@ -2350,7 +2402,13 @@ namespace robot_qt_viewer
                 m_onlineActive = true;
                 m_onlineShowThickness = true;
                 m_onlinePickEnabled = false;
-                m_onlineJob->begin(std::move(task));
+                std::vector<OnlinePredictionObjectBinding> displayBindings;
+                displayBindings.reserve(m_onlineObjects.size());
+                for(OnlineObject& object : m_onlineObjects) {
+                    displayBindings.push_back({ object.id.toStdString(), std::move(object.binding) });
+                }
+                m_onlineDisplayOverlays.reset();
+                m_onlineJob->begin(std::move(task), std::move(displayBindings));
                 services->setCoatingAnalysisView(true);
                 applyModelVisibilityOverrides();
                 services->setSurfaceScalarProbeEnabled(false, QString());
@@ -2362,6 +2420,8 @@ namespace robot_qt_viewer
                     services->clearCoatingPredictionModel(m_session.objectId);
                 }
             } catch(const std::exception& exception) {
+                m_onlineDiagnostics->event(QStringLiteral("FAILED"), 0.0,
+                    QString::fromLocal8Bit(exception.what()));
                 resetOnlinePrediction();
                 m_status = QString::fromLocal8Bit(exception.what());
                 m_onlineStatus = m_status;
@@ -2370,12 +2430,31 @@ namespace robot_qt_viewer
                 return;
             }
         }
+        m_onlineFirstFrameMilliseconds = -1.0;
+        m_onlineWaitingForFirstFrame = true;
+        m_onlineThicknessFramePending = false;
+        m_onlineRefreshStartedAt = std::chrono::steady_clock::now();
+        m_onlineSceneFrameCount = 0;
+        m_onlineViewportFrameCount = 0;
+        m_onlineThicknessFrameCount = 0;
+        m_onlineLastPresentedAt = {};
+        m_onlineNextDisplayAt = {};
+        m_onlineFrameIntervals.clear();
+        m_onlineMaximumFrameIntervalMilliseconds = -1.0;
+        m_onlineLastLongFrameLog = {};
+        updateOnlineScreenRefreshRate();
+        m_panel.setOnlineRefreshStatistics(0.0, 0.0, -1.0, true,
+            0.0, -1.0, -1.0, m_onlineScreenRefreshRate);
+        m_onlineLastRenderMilliseconds = 0.0;
         m_onlineSpraying = true;
         if(!virtualSource) {
             m_onlineCurrentTablePose = m_liveTablePose;
             m_onlineCurrentGunPose = m_liveGunPose;
         }
         if(virtualSource) {
+            m_onlineRefreshCadence = OnlineRefreshCadence();
+            m_onlineRefreshCadence.setDisplayRefreshRate(m_onlineScreenRefreshRate);
+            m_onlineVirtualTimer->setInterval(m_onlineRefreshCadence.intervalMilliseconds());
             m_onlineVirtualRunBaseSeconds = m_onlineVirtualTimeSeconds;
             m_onlineVirtualRunStartedAt = std::chrono::steady_clock::now();
             m_onlineVirtualTimer->start();
@@ -2385,7 +2464,6 @@ namespace robot_qt_viewer
         m_onlinePendingPoints.clear();
         m_onlineLastPoseTimeSeconds = virtualSource
             ? m_onlineVirtualTimeSeconds : now;
-        m_onlineLastFlushTimeSeconds = m_onlineLastPoseTimeSeconds;
         spraytrajectory::SprayPathPoint point;
         point.time = virtualSource ? m_onlineVirtualTimeSeconds
             : now - m_onlineStartTimeSeconds;
@@ -2394,12 +2472,34 @@ namespace robot_qt_viewer
         point.sprayEnabled = true;
         point.processId = "online";
         m_onlinePendingPoints.push_back(std::move(point));
-        updateOnlinePoseDisplay();
+        if(virtualSource) {
+            const double integrationStep = m_onlineIntegrationSampling.timeStepSeconds(
+                m_onlinePendingPoints.back().tcpPose.translation(),
+                m_onlineVirtualRotating ? m_onlineVirtualRpm : 0.0,
+                m_onlineVirtualRotating ? 0.0 : m_onlineVirtualGunSpeed);
+            m_onlineDiagnostics->event(QStringLiteral("INTEGRATION_SAMPLING"), 0.0,
+                QStringLiteral("adaptive_motion=1; initial_max_step_ms=%1; rpm=%2; gun_speed_m_s=%3; random_axis=%4")
+                    .arg(integrationStep * 1000.0, 0, 'g', 9)
+                    .arg(m_onlineVirtualRotating ? m_onlineVirtualRpm : 0.0)
+                    .arg(m_onlineVirtualRotating ? 0.0 : m_onlineVirtualGunSpeed)
+                    .arg(m_onlineVirtualRandomAxis));
+        }
+        if(!m_onlineResult) {
+            m_onlineDisplayedTablePose = m_onlineCurrentTablePose;
+            m_onlineDisplayedGunPose = m_onlineCurrentGunPose;
+            updateOnlinePoseDisplay();
+        }
         m_status = QStringLiteral("Online accumulation active.");
         m_onlineStatus = m_status;
         m_panel.setOnlinePredictionState(true, true,
             m_status);
+        if(m_onlineVirtualRandomAxis) {
+            m_panel.setOnlineRandomRotationState(m_onlineDisplayedRotationAxis,
+                m_onlineRandomRotation.seed());
+        }
         refreshViewModel();
+        m_onlineGuiStartupMilliseconds = elapsedMilliseconds(m_onlineDiagnosticStartedAt);
+        m_onlineDiagnostics->event(QStringLiteral("GUI_PREPARATION"), m_onlineGuiStartupMilliseconds);
     }
 
     void CoatingAnalysisModuleController::stopOnlineSpray()
@@ -2434,6 +2534,13 @@ namespace robot_qt_viewer
         m_panel.setOnlinePredictionState(true, false,
             m_status);
         refreshViewModel();
+        m_onlineDiagnostics->event(QStringLiteral("STOP_REQUESTED"), 0.0);
+        if(m_onlineLastSubmittedFrameId == 0
+            || m_onlineLastAcknowledgedFrameId >= m_onlineLastSubmittedFrameId) {
+            m_onlineDiagnostics->finish(QStringLiteral("spray stopped"));
+            m_onlineDiagnosticTimer->stop();
+            m_panel.setOnlineDiagnostics(m_onlineDiagnostics->summary(), m_onlineDiagnostics->filePath());
+        }
     }
 
     void CoatingAnalysisModuleController::flushOnlineTrajectory()
@@ -2446,12 +2553,20 @@ namespace robot_qt_viewer
         segment.processId = "online";
         segment.sprayEnabled = true;
         segment.points = m_onlinePendingPoints;
+        OnlinePredictionFrame frame;
+        frame.submittedAt = std::chrono::steady_clock::now();
+        frame.inputIntervalMilliseconds = m_onlineLastInputSubmittedAt == std::chrono::steady_clock::time_point{}
+            ? 0.0 : std::chrono::duration<double, std::milli>(frame.submittedAt - m_onlineLastInputSubmittedAt).count();
+        m_onlineLastInputSubmittedAt = frame.submittedAt;
+        frame.timeSeconds = segment.points.back().time;
+        frame.tablePose = m_onlineCurrentTablePose;
+        frame.gunPose = m_onlineCurrentGunPose;
+        frame.rotationAxis = m_onlineVirtualAxis;
         trajectory.segments.push_back(std::move(segment));
-        m_onlineJob->append(std::move(trajectory));
+        m_onlineLastSubmittedFrameId = m_onlineJob->append(std::move(trajectory), std::move(frame));
         spraytrajectory::SprayPathPoint last = m_onlinePendingPoints.back();
         m_onlinePendingPoints.clear();
         m_onlinePendingPoints.push_back(std::move(last));
-        m_onlineLastFlushTimeSeconds = m_onlineLastPoseTimeSeconds;
     }
 
     void CoatingAnalysisModuleController::handleLiveRobotPose(
@@ -2481,10 +2596,9 @@ namespace robot_qt_viewer
             resetOnlinePrediction();
             return;
         }
-        m_onlineCurrentTablePose = table;
-        m_onlineCurrentGunPose = gun;
-        updateOnlinePoseDisplay();
         if(!m_onlineSpraying) {
+            m_onlineCurrentTablePose = table;
+            m_onlineCurrentGunPose = gun;
             return;
         }
         if(event.liveSampleTimeSeconds <= m_onlineLastPoseTimeSeconds) {
@@ -2494,6 +2608,8 @@ namespace robot_qt_viewer
             flushOnlineTrajectory();
             m_onlinePendingPoints.clear();
         }
+        m_onlineCurrentTablePose = table;
+        m_onlineCurrentGunPose = gun;
         spraytrajectory::SprayPathPoint point;
         point.time = event.liveSampleTimeSeconds - m_onlineStartTimeSeconds;
         point.tcpPose = table.inverse() * gun;
@@ -2501,9 +2617,7 @@ namespace robot_qt_viewer
         point.processId = "online";
         m_onlinePendingPoints.push_back(std::move(point));
         m_onlineLastPoseTimeSeconds = event.liveSampleTimeSeconds;
-        if(event.liveSampleTimeSeconds - m_onlineLastFlushTimeSeconds >= 0.25) {
-            flushOnlineTrajectory();
-        }
+        flushOnlineTrajectory();
     }
 
     void CoatingAnalysisModuleController::advanceVirtualOnlineSpray()
@@ -2519,15 +2633,23 @@ namespace robot_qt_viewer
             : onlineGunTravelTimeSeconds(m_onlineVirtualGunStart,
                 m_onlineVirtualGunEnd, m_onlineVirtualGunSpeed);
         const double targetTime = std::min(requestedTime, travelTime);
-        const int targetStep = static_cast<int>(
-            std::floor(targetTime / kOnlineVirtualStepSeconds));
-        const int lastStep = std::min(targetStep, m_onlineVirtualStepIndex + 100);
-        for(int step = m_onlineVirtualStepIndex + 1; step <= lastStep; ++step) {
-            const double time = step * kOnlineVirtualStepSeconds;
-            m_onlineCurrentTablePose = m_onlineVirtualRotating
-                ? onlineRotatingWorkpiecePose(m_onlineVirtualCenter,
-                    m_onlineVirtualAxis, m_onlineVirtualRpm, time)
-                : Eigen::Isometry3d::Identity();
+        while(targetTime - m_onlineLastPoseTimeSeconds > 1.0e-9) {
+            const Eigen::Vector3d relativeGunPosition = m_onlineCurrentTablePose.inverse()
+                * m_onlineCurrentGunPose.translation();
+            const double integrationStep = m_onlineIntegrationSampling.timeStepSeconds(
+                relativeGunPosition, m_onlineVirtualRotating ? m_onlineVirtualRpm : 0.0,
+                m_onlineVirtualRotating ? 0.0 : m_onlineVirtualGunSpeed);
+            const double time = onlineNextSampleTimeSeconds(
+                m_onlineLastPoseTimeSeconds, targetTime, integrationStep);
+            if(m_onlineVirtualRandomAxis) {
+                m_onlineCurrentTablePose = m_onlineRandomRotation.poseAt(time);
+                m_onlineVirtualAxis = m_onlineRandomRotation.axis();
+            } else {
+                m_onlineCurrentTablePose = m_onlineVirtualRotating
+                    ? onlineRotatingWorkpiecePose(m_onlineVirtualCenter,
+                        m_onlineVirtualAxis, m_onlineVirtualRpm, time)
+                    : Eigen::Isometry3d::Identity();
+            }
             m_onlineCurrentGunPose = onlineVirtualGunPose(m_onlineVirtualCenter,
                 m_onlineVirtualGunStart, m_onlineVirtualGunEnd,
                 m_onlineVirtualGunSpeed,
@@ -2541,27 +2663,11 @@ namespace robot_qt_viewer
             m_onlinePendingPoints.push_back(std::move(point));
             m_onlineLastPoseTimeSeconds = time;
         }
-        m_onlineVirtualStepIndex = lastStep;
         m_onlineVirtualTimeSeconds = m_onlineLastPoseTimeSeconds;
-        if(lastStep == targetStep && requestedTime >= travelTime
-            && travelTime - m_onlineLastPoseTimeSeconds > 1.0e-9) {
-            m_onlineCurrentGunPose = onlineVirtualGunPose(m_onlineVirtualCenter,
-                m_onlineVirtualGunStart, m_onlineVirtualGunEnd,
-                m_onlineVirtualGunSpeed, travelTime);
-            spraytrajectory::SprayPathPoint point;
-            point.time = travelTime;
-            point.tcpPose = m_onlineCurrentGunPose;
-            point.sprayEnabled = true;
-            point.processId = "online";
-            m_onlinePendingPoints.push_back(std::move(point));
-            m_onlineLastPoseTimeSeconds = travelTime;
-            m_onlineVirtualTimeSeconds = travelTime;
-        }
-        updateOnlinePoseDisplay();
-        if(m_onlineLastPoseTimeSeconds - m_onlineLastFlushTimeSeconds >= 0.25) {
-            flushOnlineTrajectory();
-        }
-        if(lastStep == targetStep && requestedTime >= travelTime) {
+        // All physical substeps share one GPU submission/readback and display
+        // update. GUI refresh cadence must not determine integration accuracy.
+        flushOnlineTrajectory();
+        if(requestedTime >= travelTime) {
             finishOnlineSpray(false);
         }
     }
@@ -2577,12 +2683,12 @@ namespace robot_qt_viewer
         }
         for(const OnlineObject& object : m_onlineObjects) {
             services->previewSceneObjectTransform(object.id,
-                makeTransformDesc(m_onlineCurrentTablePose
+                makeTransformDesc(m_onlineDisplayedTablePose
                     * m_onlineInitialTablePose.inverse()
                     * object.worldFromObject));
         }
-        const Eigen::Vector3d position = m_onlineCurrentGunPose.translation();
-        const Eigen::Matrix3d& rotation = m_onlineCurrentGunPose.linear();
+        const Eigen::Vector3d position = m_onlineDisplayedGunPose.translation();
+        const Eigen::Matrix3d& rotation = m_onlineDisplayedGunPose.linear();
         CoatingTrajectoryPreviewPoint point;
         point.positionX = position.x();
         point.positionY = position.y();
@@ -2604,34 +2710,281 @@ namespace robot_qt_viewer
         services->setCoatingTrajectoryPreview({ point }, true, false, true);
     }
 
-    void CoatingAnalysisModuleController::handleOnlineField(
-        const spraythickness::ThicknessPredictionResult& result)
+    void CoatingAnalysisModuleController::updateOnlineScreenRefreshRate()
     {
-        if(!m_onlineActive) {
+        QWindow* window = m_panel.window()->windowHandle();
+        QScreen* screen = window != nullptr ? window->screen() : QGuiApplication::primaryScreen();
+        m_onlineScreenRefreshRate = screen != nullptr && screen->refreshRate() > 0.0
+            ? screen->refreshRate() : 60.0;
+        m_onlineRefreshCadence.setDisplayRefreshRate(m_onlineScreenRefreshRate);
+    }
+
+    void CoatingAnalysisModuleController::refreshOnlineReadouts(double timeSeconds)
+    {
+        CoatingAnalysisInfoView view;
+        view.hasThickness = true;
+        view.thicknessMetrics = m_onlineResult->metrics;
+        view.predictionTiming = m_onlineResult->timing;
+        view.predictionElapsedSeconds = timeSeconds;
+        view.minimumDisplayThicknessMicrometers =
+            m_onlineResult->metrics.minThickness * kMetersToMicrometers;
+        view.maximumDisplayThicknessMicrometers =
+            m_onlineResult->metrics.maxThickness * kMetersToMicrometers;
+        view.uniformityStatistics = m_onlineUniformity;
+        m_infoPanel.applyThicknessInfo(view);
+        m_treePanel.applyThicknessInfo(true, view.thicknessMetrics);
+    }
+
+    void CoatingAnalysisModuleController::updateOnlineRefreshStatistics()
+    {
+        if(!m_active || !onlineModeActive()) {
             return;
         }
-        m_onlineResult = result;
-        m_onlineStatus = QStringLiteral("Online thickness: %1 vertices, maximum %2 um.")
-            .arg(static_cast<qulonglong>(result.field.results.size()))
-            .arg(result.metrics.maxThickness * kMetersToMicrometers, 0, 'f', 3);
-        if(m_active && onlineModeActive()) {
-            m_status = m_onlineStatus;
-            restoreOnlineDisplay();
-            m_panel.setOnlinePredictionState(
-                m_onlineActive, m_onlineSpraying, m_status);
-            refreshViewModel();
-            publishStateChanged();
+        const auto now = std::chrono::steady_clock::now();
+        const double seconds = std::chrono::duration<double>(
+            now - m_onlineRefreshStartedAt).count();
+        if(seconds <= 0.0) {
+            return;
         }
+        updateOnlineScreenRefreshRate();
+        double p95 = -1.0;
+        if(!m_onlineFrameIntervals.empty()) {
+            std::sort(m_onlineFrameIntervals.begin(), m_onlineFrameIntervals.end());
+            p95 = m_onlineFrameIntervals[static_cast<std::size_t>(
+                std::ceil(0.95 * m_onlineFrameIntervals.size())) - 1];
+        }
+        // Qt window submissions are not measurements of physical monitor scanout.
+        m_panel.setOnlineRefreshStatistics(m_onlineSceneFrameCount / seconds,
+            m_onlineThicknessFrameCount / seconds, m_onlineFirstFrameMilliseconds,
+            m_onlineWaitingForFirstFrame, m_onlineViewportFrameCount / seconds,
+            p95, m_onlineMaximumFrameIntervalMilliseconds, m_onlineScreenRefreshRate);
+        if(!m_onlineDiagnostics->filePath().isEmpty()) {
+            const auto state = m_onlineJob->diagnosticState();
+            m_onlineDiagnostics->checkWaitingPhase(state.phase, state.milliseconds);
+            m_panel.setOnlineDiagnostics(m_onlineDiagnostics->summary(), m_onlineDiagnostics->filePath());
+        }
+        if(m_onlineActive && m_onlineVirtualRandomAxis) {
+            m_panel.setOnlineRandomRotationState(m_onlineDisplayedRotationAxis,
+                m_onlineRandomRotation.seed());
+        }
+        m_onlineRefreshStartedAt = now;
+        m_onlineSceneFrameCount = 0;
+        m_onlineViewportFrameCount = 0;
+        m_onlineThicknessFrameCount = 0;
+        m_onlineFrameIntervals.clear();
+    }
+
+    void CoatingAnalysisModuleController::handleOnlineField(
+        const std::shared_ptr<const spraythickness::OnlineThicknessSnapshot>& result,
+        const ThicknessUniformityStatistics& uniformity,
+        const OnlinePredictionFrame& frame)
+    {
+        if(!m_onlineActive) {
+            m_onlineJob->acknowledgeFrame(frame.id);
+            return;
+        }
+        m_onlinePendingFrameId = frame.id;
+        const auto now = std::chrono::steady_clock::now();
+        m_onlineFieldReceivedAt = now;
+        m_onlineDeliveryWaitMilliseconds = elapsedMilliseconds(frame.computedAt);
+        if(m_active && onlineModeActive() && m_onlineSpraying && now < m_onlineNextDisplayAt) {
+            m_onlinePendingDisplay = std::make_unique<PendingOnlineDisplay>(
+                PendingOnlineDisplay{ result, uniformity, frame });
+            const int waitMilliseconds = static_cast<int>(std::ceil(
+                std::chrono::duration<double, std::milli>(m_onlineNextDisplayAt - now).count()));
+            // Keep the worker's presentation backpressure while waiting. No spray
+            // intervals are dropped, and the cloud and poses stay in the same frame.
+            QTimer::singleShot(waitMilliseconds, Qt::PreciseTimer, this,
+                [this, frameId = frame.id]() {
+                    if(m_onlineActive && m_onlinePendingDisplay
+                        && m_onlinePendingDisplay->frame.id == frameId) {
+                        applyPendingOnlineField();
+                    }
+                });
+            return;
+        }
+        applyOnlineField(result, uniformity, frame);
+    }
+
+    void CoatingAnalysisModuleController::applyPendingOnlineField()
+    {
+        if(!m_onlinePendingDisplay) return;
+        auto pending = std::move(m_onlinePendingDisplay);
+        applyOnlineField(pending->result, pending->uniformity, pending->frame);
+    }
+
+    void CoatingAnalysisModuleController::applyOnlineField(
+        const std::shared_ptr<const spraythickness::OnlineThicknessSnapshot>& result,
+        const ThicknessUniformityStatistics& uniformity,
+        const OnlinePredictionFrame& frame)
+    {
+        const auto resultHandlingStartedAt = std::chrono::steady_clock::now();
+        if(!m_onlineActive) {
+            m_onlineJob->acknowledgeFrame(frame.id);
+            return;
+        }
+        const bool firstResult = !m_onlineResult;
+        m_onlineResult = result;
+        m_onlineDisplayOverlays = frame.displayOverlays;
+        m_onlineWorkerMappingMilliseconds = frame.mappingMilliseconds;
+        m_onlinePendingFrameId = frame.id;
+        m_onlineDisplayedTablePose = frame.tablePose;
+        m_onlineDisplayedGunPose = frame.gunPose;
+        m_onlineDisplayedRotationAxis = frame.rotationAxis;
+        m_onlineDisplayedTimeSeconds = frame.timeSeconds;
+        m_onlineDiagnosticFrameEligible = m_onlineDiagnostics->active()
+            && frame.submittedAt >= m_onlineDiagnosticStartedAt;
+        if(m_onlineDiagnosticFrameEligible) {
+            m_onlineDiagnosticFrame = {};
+            m_onlineDiagnosticFrame.id = frame.id;
+            m_onlineDiagnosticFrame.vertices = result->size();
+            m_onlineDiagnosticFrame.sprayPoints = frame.processedSprayPointCount;
+            m_onlineDiagnosticSubmittedAt = frame.submittedAt;
+            m_onlineDiagnosticRenderedAt = {};
+            const auto& timing = result->timing;
+            using Stage = OnlineDiagnosticStage;
+            m_onlineDiagnosticFrame.at(Stage::InputGap) = frame.inputIntervalMilliseconds;
+            m_onlineDiagnosticFrame.at(Stage::InputQueue) = frame.inputQueueMilliseconds;
+            m_onlineDiagnosticFrame.at(Stage::BackendCpu) = std::max(0.0,
+                timing.backendTotalMilliseconds - timing.uploadMilliseconds
+                - timing.dispatchMilliseconds - timing.readbackMilliseconds
+                - timing.resultConversionMilliseconds - timing.gpuTimerReadMilliseconds);
+            m_onlineDiagnosticFrame.at(Stage::Upload) = timing.uploadMilliseconds;
+            m_onlineDiagnosticFrame.at(Stage::Dispatch) = timing.dispatchMilliseconds;
+            m_onlineDiagnosticFrame.at(Stage::GpuCompute) = timing.pureGpuMilliseconds;
+            m_onlineDiagnosticFrame.at(Stage::Readback) = timing.readbackMilliseconds;
+            m_onlineDiagnosticFrame.at(Stage::ResultConversion) = timing.resultConversionMilliseconds;
+            m_onlineDiagnosticFrame.at(Stage::GpuTimerWait) = timing.gpuTimerReadMilliseconds;
+            m_onlineDiagnosticFrame.at(Stage::Statistics) = frame.statisticsMilliseconds;
+            m_onlineDiagnosticFrame.at(Stage::Mapping) = frame.mappingMilliseconds;
+            m_onlineDiagnosticFrame.at(Stage::DeliveryQueue) = frame.deliveryQueueMilliseconds;
+            m_onlineDiagnosticFrame.at(Stage::PreviousPresentation) = frame.previousPresentationMilliseconds;
+            m_onlineDiagnosticFrame.at(Stage::GuiPreparation) = m_onlineGuiStartupMilliseconds;
+            m_onlineGuiStartupMilliseconds = 0.0;
+            m_onlineDiagnosticFrame.at(Stage::ContextPreparation) = frame.contextPreparationMilliseconds;
+            m_onlineDiagnosticFrame.at(Stage::BackendInitialization) = frame.backendInitializationMilliseconds;
+        }
+        if(frame.statisticsUpdated) m_onlineUniformity = uniformity;
+        else if(!m_onlineSpraying) {
+            m_onlineUniformity = calculateThicknessUniformityStatistics(*result,
+                result->metrics.minThickness, result->metrics.maxThickness);
+        }
+        m_onlineStatus = QStringLiteral("Online thickness: %1 vertices, maximum %2 um.")
+            .arg(static_cast<qulonglong>(result->size()))
+            .arg(result->metrics.maxThickness * kMetersToMicrometers, 0, 'f', 3);
+        if(m_active && onlineModeActive()) {
+            const auto displayStart = std::chrono::steady_clock::now();
+            m_onlinePacingWaitMilliseconds = elapsedMilliseconds(m_onlineFieldReceivedAt);
+            if(m_onlineDiagnosticFrameEligible) {
+                m_onlineDiagnosticFrame.at(OnlineDiagnosticStage::GuiResult) =
+                    std::chrono::duration<double, std::milli>(displayStart - resultHandlingStartedAt).count();
+                m_onlineDiagnosticFrame.at(OnlineDiagnosticStage::Pacing) = std::max(0.0,
+                    std::chrono::duration<double, std::milli>(resultHandlingStartedAt - m_onlineFieldReceivedAt).count());
+            }
+            m_onlineStatisticsMilliseconds = frame.statisticsMilliseconds;
+            m_status = m_onlineStatus;
+            if(!restoreOnlineDisplay()) {
+                if(m_onlineDiagnosticFrameEligible) {
+                    m_onlineDiagnosticFrame.at(OnlineDiagnosticStage::GuiPose) = m_onlinePoseMilliseconds;
+                    m_onlineDiagnosticFrame.at(OnlineDiagnosticStage::GuiOverlay) = m_onlineOverlayMilliseconds;
+                    m_onlineDiagnostics->event(QStringLiteral("DISPLAY_FAILED"),
+                        elapsedMilliseconds(displayStart), m_onlineStatus);
+                }
+                handleOnlineFramePresented(frame.id, false);
+                return;
+            }
+            const auto infoStart = std::chrono::steady_clock::now();
+            if(firstResult || !m_onlineSpraying || frame.statisticsUpdated) {
+                m_panel.setOnlinePredictionState(
+                    m_onlineActive, m_onlineSpraying, m_status);
+                if(m_onlineVirtualRandomAxis) {
+                    m_panel.setOnlineRandomRotationState(frame.rotationAxis,
+                        m_onlineRandomRotation.seed());
+                }
+                // Only structural transitions need the complete controls/visibility view.
+                if(firstResult || !m_onlineSpraying) refreshViewModel();
+                else refreshOnlineReadouts(frame.timeSeconds);
+                publishStateChanged();
+            }
+            if(!firstResult && m_onlineSpraying) {
+                emit thicknessLegendChanged(true,
+                    result->metrics.minThickness * kMetersToMicrometers,
+                    result->metrics.maxThickness * kMetersToMicrometers, false, false);
+            }
+            const auto now = std::chrono::steady_clock::now();
+            if(now - m_onlineLastDisplayLog >= std::chrono::seconds(1)) {
+                m_onlineLastDisplayLog = now;
+                LOG_DEBUG("rs2026") << "Online thickness display: vertices="
+                    << result->size() << ", applyAndInfoMs="
+                    << std::chrono::duration<double, std::milli>(
+                        now - displayStart).count()
+                    << ", poseMs=" << m_onlinePoseMilliseconds
+                    << ", mappingMs=" << m_onlineMappingMilliseconds
+                    << ", workerMappingMs=" << m_onlineWorkerMappingMilliseconds
+                    << ", overlayMs=" << m_onlineOverlayMilliseconds
+                    << ", infoAndLegendMs=" << elapsedMilliseconds(infoStart)
+                    << ", fullInfoRefresh=" << (firstResult || !m_onlineSpraying);
+            }
+            RobotQtViewerViewportServices* services = m_context.viewportServices();
+            const double applyMilliseconds = elapsedMilliseconds(displayStart);
+            m_onlineApplyMilliseconds = applyMilliseconds;
+            if(m_onlineDiagnosticFrameEligible) {
+                using Stage = OnlineDiagnosticStage;
+                m_onlineDiagnosticFrame.expectedIntervalMilliseconds = m_onlineRefreshCadence.displayIntervalMilliseconds();
+                m_onlineDiagnosticFrame.at(Stage::GuiPose) = m_onlinePoseMilliseconds;
+                m_onlineDiagnosticFrame.at(Stage::GuiOverlay) = m_onlineOverlayMilliseconds;
+                m_onlineDiagnosticFrame.at(Stage::GuiInfo) = elapsedMilliseconds(infoStart);
+            }
+            if(m_onlineSpraying) {
+                // The stages overlap; pace by the slower stage, not their sum.
+                m_onlineRefreshCadence.recordWork(std::max(
+                    result->timing.backendTotalMilliseconds + frame.statisticsMilliseconds
+                        + frame.mappingMilliseconds,
+                    applyMilliseconds + m_onlineLastRenderMilliseconds));
+                if(m_onlineVirtualSource) {
+                    const int interval = m_onlineRefreshCadence.intervalMilliseconds();
+                    // setInterval restarts an active QTimer even if the value is
+                    // unchanged. Resetting it on every result delays the next
+                    // input by another computation period and makes frames uneven.
+                    if(m_onlineVirtualTimer->interval() != interval) {
+                        m_onlineVirtualTimer->setInterval(interval);
+                    }
+                }
+                // Start a fresh period after a late frame; never burst to catch up.
+                m_onlineNextDisplayAt = displayStart + std::chrono::microseconds(
+                    static_cast<long long>(m_onlineRefreshCadence.displayIntervalMilliseconds() * 1000.0));
+            }
+            m_onlinePresentationRequestedAt = std::chrono::steady_clock::now();
+            if(services != nullptr
+                && services->requestCoatingFramePresentation(frame.id)) {
+                return;
+            }
+        }
+        handleOnlineFramePresented(frame.id, false);
     }
 
     void CoatingAnalysisModuleController::resetOnlinePrediction()
     {
+        m_onlineDiagnostics->finish(QStringLiteral("online prediction reset"));
+        m_onlineDiagnosticTimer->stop();
+        if(!m_onlineDiagnostics->filePath().isEmpty()) {
+            m_panel.setOnlineDiagnostics(m_onlineDiagnostics->summary(), m_onlineDiagnostics->filePath());
+        }
         if(!m_onlineActive && !m_onlineSpraying) {
             return;
         }
         m_onlinePoseWatchdog->stop();
         m_onlineVirtualTimer->stop();
         m_onlineJob->reset();
+        m_onlinePendingFrameId = 0;
+        m_onlineLastSubmittedFrameId = m_onlineLastAcknowledgedFrameId = 0;
+        m_onlineDiagnosticFrameEligible = false;
+        m_onlinePendingDisplay.reset();
+        m_onlineNextDisplayAt = {};
+        m_onlineLastPresentedAt = {};
+        m_onlineFrameIntervals.clear();
+        m_onlineMaximumFrameIntervalMilliseconds = -1.0;
+        m_onlineDisplayedTimeSeconds = 0.0;
         if(onlineModeActive()) {
             RobotQtViewerViewportServices* services = m_context.viewportServices();
             if(services != nullptr) {
@@ -2654,7 +3007,18 @@ namespace robot_qt_viewer
         }
         m_onlineObjects.clear();
         m_onlinePendingPoints.clear();
-        m_onlineResult = spraythickness::ThicknessPredictionResult();
+        m_onlineResult.reset();
+        m_onlineDisplayOverlays.reset();
+        m_onlineUniformity = ThicknessUniformityStatistics();
+        m_onlineFirstFrameMilliseconds = -1.0;
+        m_onlineWaitingForFirstFrame = false;
+        m_onlineThicknessFramePending = false;
+        m_onlineSprayRequestedAt = {};
+        m_onlineRefreshStartedAt = std::chrono::steady_clock::now();
+        m_onlineSceneFrameCount = 0;
+        m_onlineViewportFrameCount = 0;
+        m_onlineThicknessFrameCount = 0;
+        m_panel.setOnlineRefreshStatistics(0.0, 0.0, -1.0, false);
         m_onlinePickEnabled = false;
         m_onlineStatus = QStringLiteral("Ready to start online prediction.");
         m_panel.setOnlinePredictionState(false, false,
@@ -3426,6 +3790,17 @@ namespace robot_qt_viewer
         m_modelVisibility = std::move(m_onlineModelVisibility);
         m_treePanel.setWaypoints(&m_session.waypoints);
         m_mode = CoatingAnalysisMode::Online;
+        m_onlineRefreshStartedAt = std::chrono::steady_clock::now();
+        m_onlineLastPresentedAt = {};
+        m_onlineNextDisplayAt = {};
+        m_onlineFrameIntervals.clear();
+        m_onlineSceneFrameCount = 0;
+        m_onlineViewportFrameCount = 0;
+        m_onlineThicknessFrameCount = 0;
+        m_onlineRefreshTimer->start();
+        if(RobotQtViewerViewportServices* services = m_context.viewportServices()) {
+            services->setCoatingFrameDrivenRefresh(true);
+        }
         const auto* selected = findObject(m_context.document(), selectedWorkpieceId);
         const QString onlineObjectId = selected != nullptr
                 && selected->objectType == "workpiece"
@@ -3462,8 +3837,20 @@ namespace robot_qt_viewer
             return;
         }
         stopOnlineSpray();
+        // Preserve the last computed field even when leaving before its display deadline.
+        applyPendingOnlineField();
+        m_onlineDiagnostics->finish(QStringLiteral("left online page"));
+        m_onlineDiagnosticTimer->stop();
+        m_panel.setOnlineDiagnostics(m_onlineDiagnostics->summary(), m_onlineDiagnostics->filePath());
+        m_onlineRefreshTimer->stop();
+        m_onlineThicknessFramePending = false;
+        if(m_onlinePendingFrameId != 0) {
+            m_onlineJob->acknowledgeFrame(m_onlinePendingFrameId);
+            m_onlinePendingFrameId = 0;
+        }
         m_onlineStatus = m_status;
         if(RobotQtViewerViewportServices* services = m_context.viewportServices()) {
+            services->setCoatingFrameDrivenRefresh(false);
             services->setSurfaceScalarProbeEnabled(false, QString());
             services->setCoatingTrajectoryPreview({}, false);
             for(const OnlineObject& object : m_onlineObjects) {
@@ -3489,34 +3876,43 @@ namespace robot_qt_viewer
         publishStateChanged();
     }
 
-    void CoatingAnalysisModuleController::restoreOnlineDisplay()
+    bool CoatingAnalysisModuleController::restoreOnlineDisplay()
     {
         if(!m_active || !onlineModeActive() || !m_onlineActive) {
-            return;
+            return false;
         }
         RobotQtViewerViewportServices* services = m_context.viewportServices();
         if(services == nullptr) {
-            return;
+            return false;
         }
+        const auto poseStart = std::chrono::steady_clock::now();
         updateOnlinePoseDisplay();
-        for(const OnlineObject& object : m_onlineObjects) {
-            if(m_onlineResult.field.empty()) {
-                continue;
+        m_onlinePoseMilliseconds = elapsedMilliseconds(poseStart);
+        m_onlineMappingMilliseconds = 0.0;
+        m_onlineOverlayMilliseconds = 0.0;
+        if(m_onlineDisplayOverlays) {
+            for(const auto& overlay : *m_onlineDisplayOverlays) {
+                const auto overlayStart = std::chrono::steady_clock::now();
+                if(m_onlineShowThickness) {
+                    QString error;
+                    if(!services->applySurfaceScalarOverlay(overlay, &error, false)) {
+                        m_status = QStringLiteral("Online display failed: ") + error;
+                        m_onlineStatus = m_status;
+                        return false;
+                    }
+                    m_onlineThicknessFramePending = true;
+                }
+                // Keep computing and caching while hidden, without uploading
+                // an invisible cloud. Showing it again applies the latest field.
+                services->setSurfaceScalarOverlayVisible(
+                    QString::fromStdString(overlay.objectId), m_onlineShowThickness);
+                m_onlineOverlayMilliseconds += elapsedMilliseconds(overlayStart);
             }
-            const auto overlay = PaintingAnalysisMeshAdapter::makeOverlay(
-                object.id.toStdString(), object.binding, m_onlineResult);
-            QString error;
-            if(!services->applySurfaceScalarOverlay(overlay, &error, false)) {
-                m_status = QStringLiteral("Online display failed: ") + error;
-                m_onlineStatus = m_status;
-                return;
-            }
-            services->setSurfaceScalarOverlayVisible(
-                object.id, m_onlineShowThickness);
         }
         services->setSurfaceScalarProbeEnabled(
             m_onlinePickEnabled && m_onlineShowThickness,
             m_session.objectId);
+        return true;
     }
 
     bool CoatingAnalysisModuleController::rebuildReproductionScene(
@@ -5197,6 +5593,114 @@ namespace robot_qt_viewer
         }
     }
 
+    void CoatingAnalysisModuleController::handleOnlineFramePresented(
+        quint64 frameId, bool displayed)
+    {
+        const auto presentedAt = std::chrono::steady_clock::now();
+        if(frameId == 0 || frameId != m_onlinePendingFrameId) return;
+        m_onlinePendingFrameId = 0;
+        m_onlineLastAcknowledgedFrameId = frameId;
+        if(displayed && m_active && onlineModeActive()) {
+            const auto now = presentedAt;
+            if(m_onlineLastPresentedAt != std::chrono::steady_clock::time_point{}) {
+                const double intervalMilliseconds = std::chrono::duration<double, std::milli>(
+                    now - m_onlineLastPresentedAt).count();
+                m_onlineFrameIntervals.push_back(intervalMilliseconds);
+                // Lifetime maximum for this spray run; periodic P95 samples are separate.
+                const bool newMaximum = intervalMilliseconds > m_onlineMaximumFrameIntervalMilliseconds;
+                m_onlineMaximumFrameIntervalMilliseconds = std::max(
+                    m_onlineMaximumFrameIntervalMilliseconds, intervalMilliseconds);
+                // Capture the actual slow frame, not just the ordinary frame
+                // that happens to fall on the once-per-second sampling clock.
+                if(intervalMilliseconds >= 50.0
+                    && (newMaximum || now - m_onlineLastLongFrameLog >= std::chrono::seconds(1))) {
+                    m_onlineLastLongFrameLog = now;
+                    LOG_DEBUG("rs2026") << "Online long frame: frameId=" << frameId
+                        << ", intervalMs=" << intervalMilliseconds
+                        << ", deliveryWaitMs=" << m_onlineDeliveryWaitMilliseconds
+                        << ", pacingWaitMs=" << m_onlinePacingWaitMilliseconds
+                        << ", applyMs=" << m_onlineApplyMilliseconds
+                        << ", presentWaitMs=" << std::chrono::duration<double, std::milli>(
+                            presentedAt - m_onlinePresentationRequestedAt).count()
+                        << ", backendMs=" << (m_onlineResult
+                            ? m_onlineResult->timing.backendTotalMilliseconds : 0.0)
+                        << ", statisticsMs=" << m_onlineStatisticsMilliseconds
+                        << ", poseMs=" << m_onlinePoseMilliseconds
+                        << ", mappingMs=" << m_onlineMappingMilliseconds
+                        << ", workerMappingMs=" << m_onlineWorkerMappingMilliseconds
+                        << ", overlayMs=" << m_onlineOverlayMilliseconds
+                        << ", renderMs=" << m_onlineLastRenderMilliseconds;
+                }
+            }
+            m_onlineLastPresentedAt = now;
+            if(now - m_onlineLastPresentationLog >= std::chrono::seconds(1)) {
+                m_onlineLastPresentationLog = now;
+                LOG_DEBUG("rs2026") << "Online presentation: waitMs="
+                    << std::chrono::duration<double, std::milli>(
+                        presentedAt - m_onlinePresentationRequestedAt).count()
+                    << ", renderMs=" << m_onlineLastRenderMilliseconds
+                    << ", virtualIntervalMs=" << m_onlineVirtualTimer->interval()
+                    << ", displayIntervalMs=" << m_onlineRefreshCadence.displayIntervalMilliseconds()
+                    << ", screenRefreshHz=" << m_onlineScreenRefreshRate;
+            }
+            ++m_onlineSceneFrameCount;
+            if(m_onlineThicknessFramePending && m_onlineShowThickness) {
+                ++m_onlineThicknessFrameCount;
+                if(m_onlineWaitingForFirstFrame) {
+                    m_onlineWaitingForFirstFrame = false;
+                    m_onlineFirstFrameMilliseconds = std::chrono::duration<double, std::milli>(
+                        presentedAt - m_onlineSprayRequestedAt).count();
+                    LOG_DEBUG("rs2026") << "Online first cloud frame: totalMs="
+                        << m_onlineFirstFrameMilliseconds;
+                    updateOnlineRefreshStatistics();
+                }
+            }
+        }
+        if(m_onlineDiagnosticFrameEligible && m_onlineDiagnosticFrame.id == frameId) {
+            m_onlineDiagnosticFrame.displayed = displayed && m_active && onlineModeActive();
+            m_onlineDiagnosticFrame.inputToPresentMilliseconds = std::chrono::duration<double, std::milli>(
+                presentedAt - m_onlineDiagnosticSubmittedAt).count();
+            if(m_onlineDiagnosticRenderedAt != std::chrono::steady_clock::time_point{}) {
+                m_onlineDiagnosticFrame.at(OnlineDiagnosticStage::SwapWait) = std::chrono::duration<double, std::milli>(
+                    presentedAt - m_onlineDiagnosticRenderedAt).count();
+            }
+            m_onlineDiagnostics->record(m_onlineDiagnosticFrame, presentedAt);
+            m_onlineDiagnosticFrameEligible = false;
+        }
+        if(!m_onlineSpraying && frameId == m_onlineLastSubmittedFrameId) {
+            m_onlineDiagnostics->finish(QStringLiteral("final frame processed"));
+            m_onlineDiagnosticTimer->stop();
+            m_panel.setOnlineDiagnostics(m_onlineDiagnostics->summary(), m_onlineDiagnostics->filePath());
+        }
+        m_onlineThicknessFramePending = false;
+        m_onlineJob->acknowledgeFrame(frameId);
+    }
+
+    void CoatingAnalysisModuleController::handleOnlineFrameRenderProfile(
+        quint64 frameId, double sceneUpdateMilliseconds, double drawMilliseconds)
+    {
+        if(m_onlineDiagnosticFrameEligible && frameId == m_onlineDiagnosticFrame.id
+            && m_onlineDiagnosticRenderedAt == std::chrono::steady_clock::time_point{}) {
+            const auto renderedAt = std::chrono::steady_clock::now();
+            // Profile delivery is direct on the GUI thread. Subtract measured
+            // paint work to isolate the request-to-paint scheduling delay.
+            m_onlineDiagnosticFrame.at(OnlineDiagnosticStage::PaintQueue) = std::max(0.0,
+                std::chrono::duration<double, std::milli>(renderedAt - m_onlinePresentationRequestedAt).count()
+                    - sceneUpdateMilliseconds - drawMilliseconds);
+            m_onlineDiagnosticFrame.at(OnlineDiagnosticStage::SceneUpdate) = sceneUpdateMilliseconds;
+            m_onlineDiagnosticFrame.at(OnlineDiagnosticStage::DrawSubmission) = drawMilliseconds;
+            m_onlineDiagnosticRenderedAt = renderedAt;
+        }
+    }
+
+    void CoatingAnalysisModuleController::handleOnlineViewportFrameRendered(double milliseconds)
+    {
+        if(m_active && onlineModeActive()) {
+            ++m_onlineViewportFrameCount;
+            m_onlineLastRenderMilliseconds = milliseconds;
+        }
+    }
+
     void CoatingAnalysisModuleController::handleViewportFrameSwapped()
     {
         if(!m_reproductionFramePending || !reproductionActive()
@@ -5304,6 +5808,7 @@ namespace robot_qt_viewer
             if(!enabled) {
                 m_onlinePickEnabled = false;
             }
+            if(enabled && m_onlineResult) restoreOnlineDisplay();
             if(RobotQtViewerViewportServices* services = m_context.viewportServices()) {
                 for(const OnlineObject& object : m_onlineObjects) {
                     services->setSurfaceScalarOverlayVisible(object.id, enabled);
@@ -5349,7 +5854,7 @@ namespace robot_qt_viewer
     {
         if(onlineModeActive()) {
             m_onlinePickEnabled = enabled && m_onlineShowThickness
-                && !m_onlineResult.field.empty();
+                && (m_onlineResult && !m_onlineResult->empty());
             if(RobotQtViewerViewportServices* services = m_context.viewportServices()) {
                 services->setSurfaceScalarProbeEnabled(
                     m_onlinePickEnabled, m_session.objectId);
@@ -5888,7 +6393,7 @@ namespace robot_qt_viewer
     {
         CoatingAnalysisViewModel viewModel;
         const bool onlineHasField = onlineModeActive()
-            && !m_onlineResult.field.empty();
+            && (m_onlineResult && !m_onlineResult->empty());
         for(const simulation_project::SceneObjectDesc& object : m_context.document().objects) {
             if(object.objectType != "workpiece") {
                 continue;
@@ -6020,13 +6525,13 @@ namespace robot_qt_viewer
         }
         if(onlineHasField) {
             viewModel.minimumMicrometers =
-                m_onlineResult.metrics.minThickness * kMetersToMicrometers;
+                m_onlineResult->metrics.minThickness * kMetersToMicrometers;
             viewModel.maximumMicrometers =
-                m_onlineResult.metrics.maxThickness * kMetersToMicrometers;
+                m_onlineResult->metrics.maxThickness * kMetersToMicrometers;
             viewModel.midpointMicrometers =
                 (viewModel.minimumMicrometers + viewModel.maximumMicrometers) * 0.5;
             viewModel.averageMicrometers =
-                m_onlineResult.metrics.averageThickness * kMetersToMicrometers;
+                m_onlineResult->metrics.averageThickness * kMetersToMicrometers;
         }
         m_panel.applyViewModel(viewModel);
 
@@ -6039,7 +6544,7 @@ namespace robot_qt_viewer
         treeView.hasThickness = onlineHasField || m_session.hasResult;
         if(treeView.hasThickness) {
             treeView.thicknessMetrics = onlineHasField
-                ? m_onlineResult.metrics : m_session.prediction.metrics;
+                ? m_onlineResult->metrics : m_session.prediction.metrics;
         }
         for(const CoatingAnalysisWorkpieceItem& item : viewModel.workpieces) {
             const bool visible = m_modelVisibility.contains(item.id)
@@ -6130,20 +6635,15 @@ namespace robot_qt_viewer
             infoView.uniformityStatistics = m_session.uniformityStatistics;
         }
         if(onlineHasField) {
-            infoView.thicknessMetrics = m_onlineResult.metrics;
-            infoView.predictionTiming = m_onlineResult.timing;
-            infoView.predictionElapsedSeconds = m_onlineVirtualSource
-                ? m_onlineVirtualTimeSeconds
-                : m_liveSampleTimeSeconds - m_onlineStartTimeSeconds;
+            infoView.thicknessMetrics = m_onlineResult->metrics;
+            infoView.predictionTiming = m_onlineResult->timing;
+            infoView.predictionElapsedSeconds = m_onlineDisplayedTimeSeconds;
             infoView.manualThicknessRange = false;
             infoView.minimumDisplayThicknessMicrometers =
                 viewModel.minimumMicrometers;
             infoView.maximumDisplayThicknessMicrometers =
                 viewModel.maximumMicrometers;
-            infoView.uniformityStatistics = calculateThicknessUniformityStatistics(
-                m_onlineResult.field,
-                m_onlineResult.metrics.minThickness,
-                m_onlineResult.metrics.maxThickness);
+            infoView.uniformityStatistics = m_onlineUniformity;
         }
         m_infoPanel.applyInfo(infoView);
 
@@ -6179,13 +6679,13 @@ namespace robot_qt_viewer
         RobotQtViewerCoatingAnalysisPayload payload;
         payload.objectId = activeCoatingObjectId();
         const bool onlineResult = onlineModeActive()
-            && !m_onlineResult.field.empty();
+            && (m_onlineResult && !m_onlineResult->empty());
         payload.hasResult = onlineResult || m_session.hasResult;
         payload.showThickness = onlineModeActive()
             ? m_onlineShowThickness : m_session.showThickness;
         if(onlineResult) {
-            payload.minimumThicknessMeters = m_onlineResult.metrics.minThickness;
-            payload.maximumThicknessMeters = m_onlineResult.metrics.maxThickness;
+            payload.minimumThicknessMeters = m_onlineResult->metrics.minThickness;
+            payload.maximumThicknessMeters = m_onlineResult->metrics.maxThickness;
         } else if(m_session.hasResult) {
             payload.minimumThicknessMeters = m_session.prediction.metrics.minThickness;
             payload.maximumThicknessMeters = m_session.prediction.metrics.maxThickness;

@@ -26,7 +26,7 @@ namespace robot_qt_viewer
         QString compactColonSpacing(QString text)
         {
             static const QRegularExpression spacesAroundColon(
-                QStringLiteral("[ \\t]*([:\\uFF1A])[ \\t]*"));
+                QStringLiteral("[ \\t]*([:\\x{FF1A}])[ \\t]*"));
             return text.replace(spacesAroundColon, QStringLiteral("\\1"));
         }
     }
@@ -56,7 +56,7 @@ namespace robot_qt_viewer
 
         {
             const spraythickness::PaperGaussianParameters parameters;
-            m_depositionReadout->setText(
+            setReadout(m_depositionReadout,
                 QStringLiteral("Amplitude    : %1 mm\n"
                                "Rotation     : %2\n"
                                "Phi offset   : %3\n"
@@ -78,7 +78,7 @@ namespace robot_qt_viewer
         }
         {
             const spraythickness::HeatHistoryParameters parameters;
-            m_historyReadout->setText(
+            setReadout(m_historyReadout,
                 QStringLiteral("Correction amp: %1\n"
                                "History scale : %2 s\n"
                                "Ref history   : %3 s\n"
@@ -104,9 +104,17 @@ namespace robot_qt_viewer
             }
         }
         for(QLabel* label : findChildren<QLabel*>()) {
-            label->setText(compactColonSpacing(
-                coatingAnalysisTranslate(m_languageCode, label->text())));
+            const QString source = label->property("sourceText").toString();
+            setReadout(label, source.isEmpty() ? label->text() : source);
         }
+    }
+
+    void CoatingAnalysisInfoPanel::setReadout(QLabel* label, const QString& text)
+    {
+        label->setProperty("sourceText", text);
+        const QString translated = compactColonSpacing(
+            coatingAnalysisTranslate(m_languageCode, text));
+        if(label->text() != translated) label->setText(translated);
     }
 
     QToolButton* CoatingAnalysisInfoPanel::addSection(
@@ -132,6 +140,7 @@ namespace robot_qt_viewer
         contentLayout->setContentsMargins(18, 0, 0, 4);
         contentLayout->setSpacing(0);
         readout = new QLabel(QStringLiteral("-"), content);
+        readout->setObjectName(title + QStringLiteral("Readout"));
         readout->setTextInteractionFlags(Qt::TextSelectableByMouse);
         readout->setWordWrap(true);
         readout->setStyleSheet(QStringLiteral("font-family: Consolas, monospace;"));
@@ -154,7 +163,8 @@ namespace robot_qt_viewer
             return;
         }
         section->setProperty("sourceTitle", title);
-        section->setText(coatingAnalysisTranslate(m_languageCode, title));
+        const QString translated = coatingAnalysisTranslate(m_languageCode, title);
+        if(section->text() != translated) section->setText(translated);
     }
 
     void CoatingAnalysisInfoPanel::applyInfo(const CoatingAnalysisInfoView& view)
@@ -177,7 +187,7 @@ namespace robot_qt_viewer
 
         if(view.hasModel) {
             const CoatingAnalysisModelInfo& info = view.modelInfo;
-            m_modelReadout->setText(
+            setReadout(m_modelReadout,
                 QStringLiteral("Submeshes : %1\nVertices  : %2\nTriangles : %3\n"
                                "Size      : %4 x %5 x %6 mm")
                     .arg(static_cast<qulonglong>(info.subMeshCount))
@@ -187,7 +197,7 @@ namespace robot_qt_viewer
                     .arg(info.sizeYMeters * 1000.0, 0, 'f', 2)
                     .arg(info.sizeZMeters * 1000.0, 0, 'f', 2));
         } else {
-            m_modelReadout->setText(QStringLiteral("No model loaded."));
+            setReadout(m_modelReadout, QStringLiteral("No model loaded."));
         }
 
         if(view.hasTrajectory) {
@@ -214,14 +224,23 @@ namespace robot_qt_viewer
                     .arg(view.trajectoryEffectiveSprayDurationSeconds,
                         0, 'f', 6);
             }
-            m_trajectoryReadout->setText(trajectoryText);
+            setReadout(m_trajectoryReadout, trajectoryText);
         } else {
-            m_trajectoryReadout->setText(QStringLiteral("No trajectory loaded."));
+            setReadout(m_trajectoryReadout, QStringLiteral("No trajectory loaded."));
         }
 
+        applyThicknessInfo(view);
+        setReadout(m_validationReadout, view.validationDetails);
+        setReadout(m_simulationReadout, view.simulationActive
+            ? view.simulationDetails : QStringLiteral("Simulation inactive."));
+    }
+
+    void CoatingAnalysisInfoPanel::applyThicknessInfo(const CoatingAnalysisInfoView& view)
+    {
+        const bool simulation = view.simulationActive;
         if(view.hasThickness) {
             const spraythickness::ThicknessMetrics& metrics = view.thicknessMetrics;
-            m_thicknessReadout->setText(
+            setReadout(m_thicknessReadout,
                 QStringLiteral("Min   : %1 um\n"
                                "Max   : %2 um\n"
                                "Average: %3 um\n"
@@ -392,7 +411,7 @@ namespace robot_qt_viewer
                                      : QStringLiteral("built"));
                 }
             }
-            m_computationReadout->setText(lines.join(QStringLiteral("\n")));
+            setReadout(m_computationReadout, lines.join(QStringLiteral("\n")));
 
             const ThicknessUniformityStatistics& statistics =
                 view.uniformityStatistics;
@@ -430,20 +449,15 @@ namespace robot_qt_viewer
             } else {
                 analysisLines << QStringLiteral("No vertices in the display range.");
             }
-            m_analysisReadout->setText(analysisLines.join(QStringLiteral("\n")));
+            setReadout(m_analysisReadout, analysisLines.join(QStringLiteral("\n")));
         } else {
-            m_thicknessReadout->setText(simulation
+            setReadout(m_thicknessReadout, simulation
                 ? QStringLiteral("No simulation thickness result yet.")
                 : QStringLiteral("No thickness result yet."));
-            m_computationReadout->setText(simulation
+            setReadout(m_computationReadout, simulation
                 ? QStringLiteral("Waiting for simulation...")
                 : QStringLiteral("No computation data yet."));
-            m_analysisReadout->setText(QStringLiteral("No thickness result yet."));
+            setReadout(m_analysisReadout, QStringLiteral("No thickness result yet."));
         }
-        m_validationReadout->setText(view.validationDetails);
-        m_simulationReadout->setText(view.simulationActive
-            ? view.simulationDetails
-            : QStringLiteral("Simulation inactive."));
-        setLanguageCode(m_languageCode);
     }
 }

@@ -64,6 +64,16 @@ namespace robot_qt_viewer
             const PaintingAnalysisMeshBinding& binding,
             const spraythickness::ThicknessPredictionResult& prediction);
 
+        static void updateOverlay(const std::string& objectId,
+            const PaintingAnalysisMeshBinding& binding,
+            const spraythickness::ThicknessPredictionResult& prediction,
+            smrobot::visualization::SurfaceScalarOverlay& overlay);
+
+        static void updateOverlay(const std::string& objectId,
+            const PaintingAnalysisMeshBinding& binding,
+            const spraythickness::OnlineThicknessSnapshot& snapshot,
+            smrobot::visualization::SurfaceScalarOverlay& overlay);
+
         static smrobot::visualization::SurfaceScalarOverlay makeRelativeErrorOverlay(
             const std::string& objectId,
             const PaintingAnalysisMeshBinding& binding,

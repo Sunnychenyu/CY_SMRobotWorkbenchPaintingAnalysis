@@ -20,6 +20,7 @@ namespace robot_qt_viewer
     public:
         explicit CoatingAnalysisInfoPanel(QWidget* parent = nullptr);
         void applyInfo(const CoatingAnalysisInfoView& view);
+        void applyThicknessInfo(const CoatingAnalysisInfoView& view);
         void setLanguageCode(const QString& languageCode);
 
     private:
@@ -29,6 +30,7 @@ namespace robot_qt_viewer
             QLabel*& readout,
             QWidget*& content);
         void setSectionTitle(QToolButton* section, const QString& title);
+        void setReadout(QLabel* label, const QString& text);
 
         QToolButton* m_modelSection = nullptr;
         QToolButton* m_trajectorySection = nullptr;

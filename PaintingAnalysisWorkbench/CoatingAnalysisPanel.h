@@ -10,6 +10,7 @@
 #include <QVector>
 
 #include <cstddef>
+#include <cstdint>
 
 #include "SimulationExperiment.h"
 
@@ -80,6 +81,14 @@ namespace robot_qt_viewer
         void applyViewModel(const CoatingAnalysisViewModel& viewModel);
         void setLanguageCode(const QString& languageCode);
         void setOnlinePredictionState(bool active, bool spraying, const QString& status);
+        void setOnlineDiagnostics(const QString& summary, const QString& filePath);
+        void setOnlineRandomRotationState(const Eigen::Vector3d& axis, std::uint32_t seed);
+        void setOnlineRefreshStatistics(double sceneFramesPerSecond,
+            double thicknessFramesPerSecond, double firstFrameMilliseconds,
+            bool waitingForFirstFrame, double viewportFramesPerSecond = 0.0,
+            double frameIntervalP95Milliseconds = -1.0,
+            double maximumFrameIntervalMilliseconds = -1.0,
+            double screenRefreshRate = 0.0);
 
         spraythickness::ThicknessModelKind thicknessModel() const;
         Eigen::Vector3d sprayDirectionLocal() const;
@@ -91,6 +100,7 @@ namespace robot_qt_viewer
         OnlinePoseSource onlinePoseSource() const;
         OnlineVirtualMotion onlineVirtualMotion() const;
         Eigen::Vector3d onlineRotationAxis() const;
+        bool onlineRandomRotationAxisEnabled() const;
         double onlineRotationRpm() const;
         Eigen::Vector3d onlineGunStartOffsetMeters() const;
         Eigen::Vector3d onlineGunEndOffsetMeters() const;
@@ -207,6 +217,7 @@ namespace robot_qt_viewer
         QComboBox* m_onlinePoseSourceCombo = nullptr;
         QComboBox* m_onlineMotionCombo = nullptr;
         QComboBox* m_onlineRotationAxisCombo = nullptr;
+        QLabel* m_onlineRandomRotationLabel = nullptr;
         QDoubleSpinBox* m_onlineRpmSpinBox = nullptr;
         QDoubleSpinBox* m_onlineGunStartSpinBoxes[3]{};
         QDoubleSpinBox* m_onlineGunEndSpinBoxes[3]{};
@@ -223,6 +234,10 @@ namespace robot_qt_viewer
         QPushButton* m_onlineStartButton = nullptr;
         QPushButton* m_onlineStopButton = nullptr;
         QLabel* m_onlineStatusLabel = nullptr;
+        QLabel* m_onlineRefreshLabel = nullptr;
+        QLabel* m_onlineDiagnosticsLabel = nullptr;
+        QString m_onlineDiagnosticsSummary;
+        QString m_onlineDiagnosticsPath;
         bool m_onlineActive = false;
         bool m_onlineSpraying = false;
         void updateOnlineInputUi();

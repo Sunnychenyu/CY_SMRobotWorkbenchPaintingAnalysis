@@ -1,0 +1,10 @@
+add_executable(OnlinePredictionStreamingTest main.cpp)
+target_link_libraries(OnlinePredictionStreamingTest PRIVATE
+    SMRobotWorkbenchPaintingAnalysis::PaintingAnalysisWorkbench Qt5::Gui)
+target_compile_features(OnlinePredictionStreamingTest PRIVATE cxx_std_17)
+set_target_properties(OnlinePredictionStreamingTest PROPERTIES
+    FOLDER tests/SMRobotWorkbenchPaintingAnalysis)
+copy_runtime_dlls(OnlinePredictionStreamingTest)
+add_test(NAME OnlinePredictionStreamingTest COMMAND $<TARGET_FILE:OnlinePredictionStreamingTest>)
+set_tests_properties(OnlinePredictionStreamingTest PROPERTIES
+    WORKING_DIRECTORY $<TARGET_FILE_DIR:OnlinePredictionStreamingTest>)

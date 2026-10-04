@@ -28,6 +28,8 @@ namespace robot_qt_viewer
 
     void ThicknessLegendWidget::setRange(double minimumMicrometers, double maximumMicrometers)
     {
+        if(m_minimumMicrometers == minimumMicrometers
+            && m_maximumMicrometers == maximumMicrometers) return;
         m_minimumMicrometers = minimumMicrometers;
         m_maximumMicrometers = maximumMicrometers;
         update();
@@ -35,6 +37,7 @@ namespace robot_qt_viewer
 
     void ThicknessLegendWidget::setRelativeErrorMode(bool enabled)
     {
+        if(m_relativeErrorMode == enabled) return;
         m_relativeErrorMode = enabled;
         if(enabled && m_rangeEditor != nullptr) {
             m_rangeEditor->close();
@@ -44,6 +47,7 @@ namespace robot_qt_viewer
 
     void ThicknessLegendWidget::setEditingEnabled(bool enabled)
     {
+        if(m_editingEnabled == enabled) return;
         m_editingEnabled = enabled;
         if(!enabled && m_rangeEditor != nullptr) {
             m_rangeEditor->close();

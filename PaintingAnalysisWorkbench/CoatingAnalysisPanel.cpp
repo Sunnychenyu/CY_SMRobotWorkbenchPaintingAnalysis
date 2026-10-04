@@ -1062,7 +1062,12 @@ namespace robot_qt_viewer
         rotationForm->setContentsMargins(0, 0, 0, 0);
         m_onlineRotationAxisCombo = new QComboBox(m_onlineRotationOptions);
         m_onlineRotationAxisCombo->addItems({ QStringLiteral("X"),
-            QStringLiteral("Y"), QStringLiteral("Z") });
+            QStringLiteral("Y"), QStringLiteral("Z"), QStringLiteral("Random (changing axis)") });
+        m_onlineRotationAxisCombo->setObjectName(QStringLiteral("onlineRotationAxis"));
+        m_onlineRotationAxisCombo->setSizeAdjustPolicy(
+            QComboBox::AdjustToMinimumContentsLengthWithIcon);
+        m_onlineRotationAxisCombo->setMinimumContentsLength(0);
+        m_onlineRotationAxisCombo->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
         m_onlineRotationAxisCombo->setCurrentIndex(2);
         m_onlineRpmSpinBox = new QDoubleSpinBox(m_onlineRotationOptions);
         m_onlineRpmSpinBox->setRange(-1000.0, 1000.0);
@@ -1071,6 +1076,10 @@ namespace robot_qt_viewer
         rotationForm->addRow(QStringLiteral("Rotation axis"),
             m_onlineRotationAxisCombo);
         rotationForm->addRow(QStringLiteral("Rotation speed"), m_onlineRpmSpinBox);
+        m_onlineRandomRotationLabel = new QLabel(m_onlineRotationOptions);
+        m_onlineRandomRotationLabel->setWordWrap(true);
+        m_onlineRandomRotationLabel->setObjectName(QStringLiteral("onlineRandomRotationState"));
+        rotationForm->addRow(m_onlineRandomRotationLabel);
         m_onlineGunOptions = new QWidget(onlineGroup);
         auto* gunForm = new QFormLayout(m_onlineGunOptions);
         gunForm->setContentsMargins(0, 0, 0, 0);
@@ -1148,6 +1157,23 @@ namespace robot_qt_viewer
         m_onlineStatusLabel = new QLabel(QStringLiteral("Ready to start online prediction."), onlineGroup);
         m_onlineStatusLabel->setWordWrap(true);
         onlineLayout->addWidget(m_onlineStatusLabel);
+        m_onlineRefreshLabel = new QLabel(onlineGroup);
+        m_onlineRefreshLabel->setObjectName(QStringLiteral("onlineRefreshStatistics"));
+        m_onlineRefreshLabel->setWordWrap(true);
+        m_onlineRefreshLabel->setToolTip(QStringLiteral(
+            "Rates count Qt window submissions and draw calls, not physical screen frames. "
+            "Frame intervals reveal pauses hidden by average rates."));
+        onlineLayout->addWidget(m_onlineRefreshLabel);
+        setOnlineRefreshStatistics(0.0, 0.0, -1.0, false);
+        m_onlineDiagnosticsLabel = new QLabel(QStringLiteral("Timing detection:not started"), onlineGroup);
+        m_onlineDiagnosticsLabel->setObjectName(QStringLiteral("onlineTimingDiagnostics"));
+        m_onlineDiagnosticsLabel->setWordWrap(true);
+        m_onlineDiagnosticsLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+        m_onlineDiagnosticsLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+        m_onlineDiagnosticsLabel->setToolTip(QStringLiteral(
+            "Suspected stages are timing evidence, not a verified root cause. "
+            "GPU compute overlaps readback wait; do not add all stage times together."));
+        onlineLayout->addWidget(m_onlineDiagnosticsLabel);
         rootLayout->addWidget(onlineGroup);
         m_onlineSections.push_back(onlineGroup);
         connect(m_onlineSprayDirectionCombo,
@@ -1174,7 +1200,7 @@ namespace robot_qt_viewer
         connect(m_onlineMotionCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, [this](int) { updateOnlineInputUi(); emit onlineInputChanged(); });
         connect(m_onlineRotationAxisCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
-            this, [this](int) { emit onlineInputChanged(); });
+            this, [this](int) { updateOnlineInputUi(); emit onlineInputChanged(); });
         connect(m_onlineRpmSpinBox, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
             this, [this](double) { emit onlineInputChanged(); });
         for(int axis = 0; axis < 3; ++axis) {
@@ -1574,17 +1600,80 @@ namespace robot_qt_viewer
         updateReproductionInputUi();
         updateReproductionDescription();
         updateReproductionRecommendation();
+        if(!m_onlineDiagnosticsSummary.isEmpty()) {
+            setOnlineDiagnostics(m_onlineDiagnosticsSummary, m_onlineDiagnosticsPath);
+        }
     }
 
     void CoatingAnalysisPanel::setOnlinePredictionState(
         bool active, bool spraying, const QString& status)
     {
+        const bool stateChanged = m_onlineActive != active || m_onlineSpraying != spraying;
         m_onlineActive = active;
         m_onlineSpraying = spraying;
-        m_onlineStatusLabel->setText(coatingAnalysisTranslate(m_languageCode, status));
+        const QString text = coatingAnalysisTranslate(m_languageCode, status);
+        if(m_onlineStatusLabel->text() != text) m_onlineStatusLabel->setText(text);
         m_onlineStartButton->setEnabled(!spraying);
         m_onlineStopButton->setEnabled(spraying);
-        updateOnlineInputUi();
+        if(stateChanged) updateOnlineInputUi();
+    }
+
+    void CoatingAnalysisPanel::setOnlineRefreshStatistics(
+        double sceneFramesPerSecond, double thicknessFramesPerSecond,
+        double firstFrameMilliseconds, bool waitingForFirstFrame,
+        double viewportFramesPerSecond, double frameIntervalP95Milliseconds,
+        double maximumFrameIntervalMilliseconds, double screenRefreshRate)
+    {
+        const auto translate = [this](const QString& text) {
+            return coatingAnalysisTranslate(m_languageCode, text);
+        };
+        const QString firstFrame = waitingForFirstFrame
+            ? translate(QStringLiteral("Waiting for first cloud frame..."))
+            : (firstFrameMilliseconds >= 0.0
+                ? QStringLiteral("%1 ms").arg(firstFrameMilliseconds, 0, 'f', 1)
+                : translate(QStringLiteral("Not started")));
+        QString text = QStringLiteral("%1%2 FPS\n%3%4 Hz\n%5%6 FPS\n%7%8")
+            .arg(translate(QStringLiteral("Scene submission rate:")))
+            .arg(sceneFramesPerSecond, 0, 'f', 1)
+            .arg(translate(QStringLiteral("Cloud submission rate:")))
+            .arg(thicknessFramesPerSecond, 0, 'f', 1)
+            .arg(translate(QStringLiteral("Viewport draw rate:")))
+            .arg(viewportFramesPerSecond, 0, 'f', 1)
+            .arg(translate(QStringLiteral("First cloud frame:")))
+            .arg(firstFrame);
+        const auto milliseconds = [](double value) {
+            return value >= 0.0 ? QStringLiteral("%1 ms").arg(value, 0, 'f', 2)
+                : QStringLiteral("N/A");
+        };
+        text += QStringLiteral("\n%1%2\n%3%4\n%5%6 Hz")
+            .arg(translate(QStringLiteral("Frame interval P95:")))
+            .arg(milliseconds(frameIntervalP95Milliseconds))
+            .arg(translate(QStringLiteral("Longest frame interval:")))
+            .arg(milliseconds(maximumFrameIntervalMilliseconds))
+            .arg(translate(QStringLiteral("Screen refresh rate:")))
+            .arg(screenRefreshRate, 0, 'f', 1);
+        if(m_onlineRefreshLabel->text() != text) m_onlineRefreshLabel->setText(text);
+    }
+
+    void CoatingAnalysisPanel::setOnlineRandomRotationState(
+        const Eigen::Vector3d& axis, std::uint32_t seed)
+    {
+        const QString text = QStringLiteral("Axis direction changes smoothly every 2 s.\n"
+            "Current axis: X=%1, Y=%2, Z=%3\nRandom seed: %4")
+            .arg(axis.x(), 0, 'f', 3).arg(axis.y(), 0, 'f', 3)
+            .arg(axis.z(), 0, 'f', 3).arg(seed);
+        m_onlineRandomRotationLabel->setText(coatingAnalysisTranslate(m_languageCode, text));
+    }
+
+    void CoatingAnalysisPanel::setOnlineDiagnostics(const QString& summary, const QString& filePath)
+    {
+        m_onlineDiagnosticsSummary = summary;
+        m_onlineDiagnosticsPath = filePath;
+        // Translate only the explanation. A log path must retain its exact bytes.
+        QString text = coatingAnalysisTranslate(m_languageCode, summary);
+        if(!filePath.isEmpty()) text += QLatin1Char('\n')
+            + coatingAnalysisTranslate(m_languageCode, QStringLiteral("Diagnostic CSV:")) + filePath;
+        if(m_onlineDiagnosticsLabel->text() != text) m_onlineDiagnosticsLabel->setText(text);
     }
 
     void CoatingAnalysisPanel::updateOnlineInputUi()
@@ -1594,6 +1683,11 @@ namespace robot_qt_viewer
             == OnlineVirtualMotion::RotatingWorkpiece;
         m_onlineVirtualOptions->setVisible(virtualSource);
         m_onlineRotationOptions->setVisible(virtualSource && rotating);
+        m_onlineRandomRotationLabel->setVisible(onlineRandomRotationAxisEnabled());
+        if(!m_onlineActive) {
+            m_onlineRandomRotationLabel->setText(coatingAnalysisTranslate(m_languageCode,
+                QStringLiteral("Axis direction changes smoothly every 2 s.")));
+        }
         m_onlineGunEndOptions->setVisible(virtualSource && !rotating);
         m_onlinePoseSourceCombo->setEnabled(!m_onlineActive);
         m_onlineMotionCombo->setEnabled(!m_onlineActive);
@@ -2174,7 +2268,13 @@ namespace robot_qt_viewer
 
     Eigen::Vector3d CoatingAnalysisPanel::onlineRotationAxis() const
     {
-        return Eigen::Vector3d::Unit(m_onlineRotationAxisCombo->currentIndex());
+        return Eigen::Vector3d::Unit(onlineRandomRotationAxisEnabled()
+            ? 2 : m_onlineRotationAxisCombo->currentIndex());
+    }
+
+    bool CoatingAnalysisPanel::onlineRandomRotationAxisEnabled() const
+    {
+        return m_onlineRotationAxisCombo->currentIndex() == 3;
     }
 
     double CoatingAnalysisPanel::onlineRotationRpm() const

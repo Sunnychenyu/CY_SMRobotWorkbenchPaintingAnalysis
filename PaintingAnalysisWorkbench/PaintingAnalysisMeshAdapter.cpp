@@ -1257,11 +1257,22 @@ namespace robot_qt_viewer
         const spraythickness::ThicknessPredictionResult& prediction)
     {
         smrobot::visualization::SurfaceScalarOverlay overlay;
+        updateOverlay(objectId, binding, prediction, overlay);
+        return overlay;
+    }
+
+    template<typename ThicknessAt>
+    static void updateThicknessOverlay(
+        const std::string& objectId, const PaintingAnalysisMeshBinding& binding,
+        const spraythickness::ThicknessMetrics& metrics, std::size_t sampleCount,
+        ThicknessAt thicknessAt,
+        smrobot::visualization::SurfaceScalarOverlay& overlay)
+    {
         overlay.objectId = objectId;
         overlay.quantityName = "Thickness";
         overlay.unit = "m";
-        overlay.range.minimum = prediction.metrics.minThickness;
-        overlay.range.maximum = prediction.metrics.maxThickness;
+        overlay.range.minimum = metrics.minThickness;
+        overlay.range.maximum = metrics.maxThickness;
         overlay.subMeshes.resize(binding.sampleIndicesBySubMesh.size());
 
         for(std::size_t subMeshIndex = 0;
@@ -1270,15 +1281,34 @@ namespace robot_qt_viewer
             const std::vector<std::size_t>& sampleIndices =
                 binding.sampleIndicesBySubMesh[subMeshIndex];
             std::vector<double>& values = overlay.subMeshes[subMeshIndex].values;
-            values.reserve(sampleIndices.size());
-            for(const std::size_t sampleIndex : sampleIndices) {
-                if(sampleIndex >= prediction.field.results.size()) {
+            values.resize(sampleIndices.size());
+            for(std::size_t vertex = 0; vertex < sampleIndices.size(); ++vertex) {
+                const std::size_t sampleIndex = sampleIndices[vertex];
+                if(sampleIndex >= sampleCount) {
                     throw std::runtime_error("Thickness sample binding is out of range.");
                 }
-                values.push_back(prediction.field.results[sampleIndex].thickness);
+                values[vertex] = thicknessAt(sampleIndex);
             }
         }
-        return overlay;
+    }
+
+    void PaintingAnalysisMeshAdapter::updateOverlay(
+        const std::string& objectId, const PaintingAnalysisMeshBinding& binding,
+        const spraythickness::ThicknessPredictionResult& prediction,
+        smrobot::visualization::SurfaceScalarOverlay& overlay)
+    {
+        updateThicknessOverlay(objectId, binding, prediction.metrics,
+            prediction.field.results.size(),
+            [&](std::size_t index) { return prediction.field.results[index].thickness; }, overlay);
+    }
+
+    void PaintingAnalysisMeshAdapter::updateOverlay(
+        const std::string& objectId, const PaintingAnalysisMeshBinding& binding,
+        const spraythickness::OnlineThicknessSnapshot& snapshot,
+        smrobot::visualization::SurfaceScalarOverlay& overlay)
+    {
+        updateThicknessOverlay(objectId, binding, snapshot.metrics, snapshot.size(),
+            [&](std::size_t index) { return snapshot.thicknessMeters(index); }, overlay);
     }
 
     smrobot::visualization::SurfaceScalarOverlay

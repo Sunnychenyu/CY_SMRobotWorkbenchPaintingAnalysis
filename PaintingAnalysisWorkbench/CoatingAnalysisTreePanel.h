@@ -29,6 +29,7 @@ namespace robot_qt_viewer
         void setLanguageCode(const QString& languageCode);
 
         void applyTreeView(const CoatingAnalysisTreeView& view);
+        void applyThicknessInfo(bool hasThickness, const spraythickness::ThicknessMetrics& metrics);
         // Not owned: forwards to the model so the waypoint branch can be
         // virtualized against the controller's cached waypoint vector.
         void setWaypoints(const std::vector<spraytrajectory::SprayPathPoint>* waypoints);

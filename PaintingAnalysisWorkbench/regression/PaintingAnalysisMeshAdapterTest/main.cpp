@@ -1342,6 +1342,20 @@ int main(int argc, char** argv)
         std::cerr << "Scalar overlay projection contract failed.\n";
         return 2;
     }
+    spraythickness::OnlineThicknessSnapshot compact;
+    compact.metrics = prediction.metrics;
+    for(const auto& value : prediction.field.results) {
+        compact.thicknessMillimeters.push_back(static_cast<float>(value.thickness * 1000.0));
+    }
+    smrobot::visualization::SurfaceScalarOverlay compactOverlay;
+    robot_qt_viewer::PaintingAnalysisMeshAdapter::updateOverlay(
+        "object", mesh.binding, compact, compactOverlay);
+    if(compactOverlay.range.minimum != overlay.range.minimum
+        || compactOverlay.range.maximum != overlay.range.maximum
+        || compactOverlay.subMeshes.size() != overlay.subMeshes.size()) return 19;
+    for(std::size_t i = 0; i < overlay.subMeshes.size(); ++i) {
+        if(compactOverlay.subMeshes[i].values != overlay.subMeshes[i].values) return 19;
+    }
     if(!testPublishedReproductionConfiguration()) {
         std::cerr << "Published reproduction configuration contract failed.\n";
         return 3;

@@ -3,6 +3,8 @@
 #include "CoatingAnalysisSession.h"
 #include "PaintingAnalysisMeshAdapter.h"
 #include "SimulationExperiment.h"
+#include "OnlineVirtualMotion.h"
+#include "OnlinePredictionDiagnostics.h"
 
 #include <QHash>
 #include <QObject>
@@ -35,6 +37,7 @@ namespace robot_qt_viewer
     class RobotQtViewerDocumentContext;
     class ThicknessPredictionJobController;
     class OnlineThicknessPredictionJobController;
+    struct OnlinePredictionFrame;
     class AlgorithmReproductionJobController;
     struct RobotQtViewerEvent;
 
@@ -82,6 +85,10 @@ namespace robot_qt_viewer
 
     public slots:
         void handleViewportFrameSwapped();
+        void handleOnlineFramePresented(quint64 frameId, bool displayed);
+        void handleOnlineViewportFrameRendered(double milliseconds);
+        void handleOnlineFrameRenderProfile(quint64 frameId,
+            double sceneUpdateMilliseconds, double drawMilliseconds);
         void setThicknessDisplayRange(
             double minimumMicrometers,
             double maximumMicrometers);
@@ -102,6 +109,7 @@ namespace robot_qt_viewer
 
     private:
         struct AxisymmetricProfileState;
+        struct PendingOnlineDisplay;
         bool loadModel(const QString& path, double scaleToMeters);
         void openModelFromDialog();
         bool loadTrajectory(const QString& path);
@@ -137,7 +145,18 @@ namespace robot_qt_viewer
         void advanceVirtualOnlineSpray();
         void updateOnlinePoseDisplay();
         void flushOnlineTrajectory();
-        void handleOnlineField(const spraythickness::ThicknessPredictionResult& result);
+        void updateOnlineRefreshStatistics();
+        void updateOnlineScreenRefreshRate();
+        void refreshOnlineReadouts(double timeSeconds);
+        void handleOnlineField(
+            const std::shared_ptr<const spraythickness::OnlineThicknessSnapshot>& result,
+            const ThicknessUniformityStatistics& uniformity,
+            const OnlinePredictionFrame& frame);
+        void applyOnlineField(
+            const std::shared_ptr<const spraythickness::OnlineThicknessSnapshot>& result,
+            const ThicknessUniformityStatistics& uniformity,
+            const OnlinePredictionFrame& frame);
+        void applyPendingOnlineField();
         void setCurrentResultAsReference();
         void clearReferenceResult();
         void checkCurrentResultAgainstReference();
@@ -193,7 +212,7 @@ namespace robot_qt_viewer
         void exitReproduction();
         void enterOnline();
         void exitOnline();
-        void restoreOnlineDisplay();
+        bool restoreOnlineDisplay();
         void generateReproductionScene(bool focusView = false);
         void generateReproductionTrajectory();
         bool rebuildReproductionScene(QString* errorMessage = nullptr);
@@ -247,6 +266,7 @@ namespace robot_qt_viewer
         CoatingAnalysisSession m_session;
         std::unique_ptr<ThicknessPredictionJobController> m_predictionJob;
         std::unique_ptr<OnlineThicknessPredictionJobController> m_onlineJob;
+        std::unique_ptr<OnlinePredictionDiagnostics> m_onlineDiagnostics;
         std::unique_ptr<AlgorithmReproductionJobController> m_reproductionJob;
         QString m_status = QStringLiteral("Load a model and trajectory to begin.");
         QString m_predictionObjectId;
@@ -334,14 +354,62 @@ namespace robot_qt_viewer
         };
         std::vector<OnlineObject> m_onlineObjects;
         std::vector<spraytrajectory::SprayPathPoint> m_onlinePendingPoints;
-        spraythickness::ThicknessPredictionResult m_onlineResult;
+        std::shared_ptr<const spraythickness::OnlineThicknessSnapshot> m_onlineResult;
+        std::shared_ptr<const std::vector<smrobot::visualization::SurfaceScalarOverlay>> m_onlineDisplayOverlays;
+        std::unique_ptr<PendingOnlineDisplay> m_onlinePendingDisplay;
+        ThicknessUniformityStatistics m_onlineUniformity;
+        std::chrono::steady_clock::time_point m_onlineLastDisplayLog{};
+        std::chrono::steady_clock::time_point m_onlineRefreshStartedAt{};
+        std::chrono::steady_clock::time_point m_onlineSprayRequestedAt{};
+        std::chrono::steady_clock::time_point m_onlinePresentationRequestedAt{};
+        std::chrono::steady_clock::time_point m_onlineLastPresentationLog{};
+        std::chrono::steady_clock::time_point m_onlineLastLongFrameLog{};
+        std::chrono::steady_clock::time_point m_onlineFieldReceivedAt{};
+        std::chrono::steady_clock::time_point m_onlineNextDisplayAt{};
+        std::chrono::steady_clock::time_point m_onlineLastPresentedAt{};
+        std::vector<double> m_onlineFrameIntervals;
+        double m_onlineMaximumFrameIntervalMilliseconds = -1.0;
+        double m_onlineScreenRefreshRate = 60.0;
+        double m_onlineDisplayedTimeSeconds = 0.0;
+        OnlineRefreshCadence m_onlineRefreshCadence;
+        OnlineSprayIntegrationSampling m_onlineIntegrationSampling;
+        double m_onlineLastRenderMilliseconds = 0.0;
+        double m_onlineDeliveryWaitMilliseconds = 0.0;
+        double m_onlinePacingWaitMilliseconds = 0.0;
+        double m_onlineApplyMilliseconds = 0.0;
+        double m_onlineStatisticsMilliseconds = 0.0;
+        double m_onlinePoseMilliseconds = 0.0;
+        double m_onlineMappingMilliseconds = 0.0;
+        double m_onlineWorkerMappingMilliseconds = 0.0;
+        double m_onlineOverlayMilliseconds = 0.0;
+        std::size_t m_onlineSceneFrameCount = 0;
+        std::size_t m_onlineViewportFrameCount = 0;
+        std::size_t m_onlineThicknessFrameCount = 0;
+        double m_onlineFirstFrameMilliseconds = -1.0;
+        bool m_onlineThicknessFramePending = false;
+        bool m_onlineWaitingForFirstFrame = false;
+        std::uint64_t m_onlinePendingFrameId = 0;
+        std::uint64_t m_onlineLastSubmittedFrameId = 0;
+        std::uint64_t m_onlineLastAcknowledgedFrameId = 0;
+        OnlineDiagnosticFrame m_onlineDiagnosticFrame;
+        std::chrono::steady_clock::time_point m_onlineDiagnosticStartedAt{};
+        std::chrono::steady_clock::time_point m_onlineLastInputSubmittedAt{};
+        std::chrono::steady_clock::time_point m_onlineDiagnosticSubmittedAt{};
+        std::chrono::steady_clock::time_point m_onlineDiagnosticRenderedAt{};
+        double m_onlineGuiStartupMilliseconds = 0.0;
+        bool m_onlineDiagnosticFrameEligible = false;
         Eigen::Isometry3d m_liveGunPose = Eigen::Isometry3d::Identity();
         Eigen::Isometry3d m_liveTablePose = Eigen::Isometry3d::Identity();
         Eigen::Isometry3d m_onlineInitialTablePose = Eigen::Isometry3d::Identity();
         Eigen::Isometry3d m_onlineCurrentTablePose = Eigen::Isometry3d::Identity();
         Eigen::Isometry3d m_onlineCurrentGunPose = Eigen::Isometry3d::Identity();
+        Eigen::Isometry3d m_onlineDisplayedTablePose = Eigen::Isometry3d::Identity();
+        Eigen::Isometry3d m_onlineDisplayedGunPose = Eigen::Isometry3d::Identity();
         Eigen::Vector3d m_onlineVirtualCenter = Eigen::Vector3d::Zero();
         Eigen::Vector3d m_onlineVirtualAxis = Eigen::Vector3d::UnitZ();
+        OnlineRandomWorkpieceRotation m_onlineRandomRotation;
+        Eigen::Vector3d m_onlineDisplayedRotationAxis = Eigen::Vector3d::UnitZ();
+        bool m_onlineVirtualRandomAxis = false;
         Eigen::Vector3d m_onlineVirtualGunStart = Eigen::Vector3d::Zero();
         Eigen::Vector3d m_onlineVirtualGunEnd = Eigen::Vector3d::Zero();
         double m_onlineVirtualRpm = 0.0;
@@ -349,7 +417,6 @@ namespace robot_qt_viewer
         double m_onlineVirtualTimeSeconds = 0.0;
         double m_onlineVirtualRunBaseSeconds = 0.0;
         std::chrono::steady_clock::time_point m_onlineVirtualRunStartedAt{};
-        int m_onlineVirtualStepIndex = 0;
         bool m_onlineVirtualSource = false;
         bool m_onlineVirtualRotating = true;
         QString m_liveGunRobotId;
@@ -359,12 +426,13 @@ namespace robot_qt_viewer
         double m_liveSampleTimeSeconds = 0.0;
         double m_onlineStartTimeSeconds = 0.0;
         double m_onlineLastPoseTimeSeconds = 0.0;
-        double m_onlineLastFlushTimeSeconds = 0.0;
         bool m_onlineActive = false;
         bool m_onlineSpraying = false;
         bool m_onlineShowThickness = true;
         bool m_onlinePickEnabled = false;
         QTimer* m_onlinePoseWatchdog = nullptr;
         QTimer* m_onlineVirtualTimer = nullptr;
+        QTimer* m_onlineRefreshTimer = nullptr;
+        QTimer* m_onlineDiagnosticTimer = nullptr;
     };
 }
