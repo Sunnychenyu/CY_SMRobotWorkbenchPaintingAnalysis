@@ -31,7 +31,8 @@ namespace robot_qt_viewer
             "gui_delivery_queue_ms", "previous_frame_presentation_wait_ms", "pacing_ms", "gui_result_handling_ms",
             "gui_pose_ms", "gui_overlay_ms", "gui_info_ms", "paint_queue_ms", "scene_update_ms",
             "draw_submission_ms", "swap_callback_wait_ms", "gui_timer_lateness_ms",
-            "gui_startup_ms", "context_startup_ms", "backend_initialization_ms"
+            "gui_startup_ms", "context_startup_ms", "backend_initialization_ms",
+            "gpu_display_copy_ms", "gpu_statistics_ms", "gpu_completion_wait_ms", "gpu_scalar_draw_ms"
         };
         const std::array<const char*, kStageCount> kNames{
             "Input sampling / submission", "Input backlog / worker queue", "Backend CPU preparation",
@@ -40,7 +41,8 @@ namespace robot_qt_viewer
             "GUI event delivery", "Previous frame presentation", "Display pacing", "GUI result handling", "Pose submission",
             "Cloud conversion / upload / copy", "Information / legend update", "Repaint scheduling wait", "Scene update",
             "Draw submission", "Qt swap / compositor wait", "GUI event loop delay",
-            "Model / GUI startup", "Compute context startup", "BVH / initial GPU preparation"
+            "Model / GUI startup", "Compute context startup", "BVH / initial GPU preparation",
+            "GPU display snapshot", "GPU statistics reduction", "GPU completion wait", "GPU scalar drawing"
         };
 
         double milliseconds(Clock::duration duration)
@@ -81,6 +83,8 @@ namespace robot_qt_viewer
         bool running = false;
         std::size_t presentedFrames = 0;
         std::size_t anomalies = 0;
+        std::uint64_t firstFrameId = 0;
+        std::uint64_t lastGpuFrameId = 0;
         std::uint64_t run = 0;
         double intervalAverage = 0.0;
         double guiLateness = 0.0;
@@ -146,7 +150,7 @@ namespace robot_qt_viewer
                     }
                     QByteArray header("event,elapsed_ms,frame_id,displayed,vertices,spray_points,interval_ms,baseline_ms,expected_interval_ms,input_to_present_ms");
                     for(const char* column : kColumns) header += QByteArray(",") + column;
-                    header += ",note\n";
+                    header += ",gpu_resident_display,thickness_readback_bytes,statistics_readback_bytes,scalar_upload_bytes,integrated_ms,compute_backlog_ms,physical_time_s,note\n";
                     file.write(header);
                     continue;
                 }
@@ -166,6 +170,13 @@ namespace robot_qt_viewer
                 number(row.frame.expectedIntervalMilliseconds);
                 number(row.frame.inputToPresentMilliseconds);
                 for(double value : row.frame.stages) number(value);
+                number(row.frame.gpuResidentDisplay ? 1.0 : 0.0);
+                line += ',' + QByteArray::number(static_cast<qulonglong>(row.frame.thicknessReadbackBytes));
+                line += ',' + QByteArray::number(static_cast<qulonglong>(row.frame.statisticsReadbackBytes));
+                line += ',' + QByteArray::number(static_cast<qulonglong>(row.frame.scalarUploadBytes));
+                number(row.frame.integratedMilliseconds);
+                number(row.frame.computeBacklogMilliseconds);
+                number(row.frame.physicalTimeSeconds);
                 line += ',' + csvText(row.note).toUtf8() + '\n';
                 if(file.write(line) < 0) {
                     std::lock_guard<std::mutex> lock(mutex);
@@ -190,6 +201,7 @@ namespace robot_qt_viewer
         auto& state = *m_impl;
         state.running = true;
         state.presentedFrames = state.anomalies = 0;
+        state.firstFrameId = state.lastGpuFrameId = 0;
         state.intervalAverage = state.guiLateness = 0.0;
         state.stageAverages = {};
         state.lastAnomaly.clear();
@@ -213,6 +225,8 @@ namespace robot_qt_viewer
         state.enqueue(std::move(row));
         event(QStringLiteral("START"), 0.0, configuration + QStringLiteral(
             "; long_frame=max(20ms,1.5x_recent_interval); stage_spike=10ms_and_2.5x_recent_stage; warmup=5_frames. GPU time overlaps readback wait; stages overlap across threads and must not be summed as a frame interval. Input queue starts at the oldest merged command, input-to-present starts at the latest submitted input. Paint queue is inferred from request-to-render time minus measured paint work. Draw timing is CPU submission; swap timing is a Qt callback, not physical scanout."));
+        event(QStringLiteral("GPU_DIAGNOSTICS"), 0.0, QStringLiteral(
+            "GPU_DRAW rows are delayed nonblocking scalar-pass measurements keyed by frame_id; they are not presented frames. In GPU display mode, readback is statistics only; GPU completion waiting has a separate column."));
     }
 
     void OnlinePredictionDiagnostics::event(const QString& kind, double duration, const QString& detail)
@@ -223,6 +237,20 @@ namespace robot_qt_viewer
         row.elapsedMilliseconds = milliseconds(Clock::now() - m_impl->startedAt);
         row.intervalMilliseconds = duration;
         row.note = detail;
+        m_impl->enqueue(std::move(row));
+    }
+
+    void OnlinePredictionDiagnostics::gpuDraw(std::uint64_t frameId, double duration)
+    {
+        if(!active() || !m_impl->firstFrameId || frameId < m_impl->firstFrameId
+            || frameId <= m_impl->lastGpuFrameId) return;
+        m_impl->lastGpuFrameId = frameId;
+        Impl::Row row;
+        row.kind = QStringLiteral("GPU_DRAW");
+        row.elapsedMilliseconds = milliseconds(Clock::now() - m_impl->startedAt);
+        row.frame.id = frameId;
+        row.frame.at(OnlineDiagnosticStage::GpuScalarDraw) = duration;
+        row.note = QStringLiteral("Asynchronous GPU scalar draw; excludes Qt composition and display scanout.");
         m_impl->enqueue(std::move(row));
     }
 
@@ -241,6 +269,7 @@ namespace robot_qt_viewer
     {
         if(!active()) return;
         auto& state = *m_impl;
+        if(state.firstFrameId == 0) state.firstFrameId = frame.id;
         // Use the swap callback's entry timestamp, not time spent logging or
         // refreshing widgets inside the callback before reaching this method.
         const auto now = presentedAt;

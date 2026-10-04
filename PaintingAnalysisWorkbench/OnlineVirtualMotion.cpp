@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
+#include <utility>
 
 namespace robot_qt_viewer
 {
@@ -11,25 +13,14 @@ namespace robot_qt_viewer
         constexpr double kAxisTransitionSeconds = 2.0;
     }
 
-    void OnlineRefreshCadence::recordWork(double milliseconds)
+    void OnlineRefreshCadence::setFramesPerSecondLimit(int framesPerSecond)
     {
-        m_workMilliseconds = 0.75 * m_workMilliseconds
-            + 0.25 * std::clamp(milliseconds, 1.0, 100.0);
-    }
-
-    int OnlineRefreshCadence::intervalMilliseconds() const
-    {
-        return static_cast<int>(std::ceil(displayIntervalMilliseconds()));
-    }
-
-    void OnlineRefreshCadence::setDisplayRefreshRate(double hertz)
-    {
-        m_displayMilliseconds = 1000.0 / (std::isfinite(hertz) && hertz > 0.0 ? hertz : 60.0);
+        m_framesPerSecondLimit = std::max(0, framesPerSecond);
     }
 
     double OnlineRefreshCadence::displayIntervalMilliseconds() const
     {
-        return std::max(m_displayMilliseconds, m_workMilliseconds * 1.1);
+        return m_framesPerSecondLimit > 0 ? 1000.0 / m_framesPerSecondLimit : 0.0;
     }
 
     double onlineNextSampleTimeSeconds(double currentTime, double targetTime,
@@ -39,16 +30,44 @@ namespace robot_qt_viewer
         return std::min(currentTime + maximumStepSeconds, targetTime);
     }
 
+    void OnlineVirtualMotionClock::reset()
+    {
+        m_timeSeconds = m_rotationSeconds = m_gunSeconds = 0.0;
+    }
+
+    void OnlineVirtualMotionClock::advanceTo(double timeSeconds, bool rotating, bool movingGun)
+    {
+        const double elapsed = std::max(0.0, timeSeconds - m_timeSeconds);
+        if(rotating) m_rotationSeconds += elapsed;
+        if(movingGun) m_gunSeconds += elapsed;
+        m_timeSeconds += elapsed;
+    }
+
+    double OnlineVirtualMotionClock::nextGunTurnTimeSeconds(double travelTimeSeconds) const
+    {
+        return m_timeSeconds + onlineNextGunTurnTimeSeconds(m_gunSeconds, travelTimeSeconds)
+            - m_gunSeconds;
+    }
+
     void OnlineSprayIntegrationSampling::configure(
         const Eigen::Vector3d& boundsMinimum, const Eigen::Vector3d& boundsMaximum,
         double minimumSigmaRadians)
     {
         m_bounds = Eigen::AlignedBox3d(boundsMinimum, boundsMaximum);
+        m_surfaceDistance = {};
+        m_queryDistance = -1.0;
         m_radiusMeters = 0.5 * (boundsMaximum - boundsMinimum).norm();
         // At least twelve integration samples across the narrowest +/-3 sigma
         // footprint. Also bound normal/visibility changes for broad patterns.
         m_maximumAngularStep = std::min(0.5 * std::max(minimumSigmaRadians, 1.0e-6),
             std::acos(-1.0) / 180.0);
+    }
+
+    void OnlineSprayIntegrationSampling::setSurfaceDistanceQuery(
+        std::function<double(const Eigen::Vector3d&)> query)
+    {
+        m_surfaceDistance = std::move(query);
+        m_queryDistance = -1.0;
     }
 
     double OnlineSprayIntegrationSampling::timeStepSeconds(
@@ -59,17 +78,30 @@ namespace robot_qt_viewer
         const double surfaceSpeed = m_radiusMeters * angularSpeed
             + std::abs(gunSpeedMetersPerSecond);
         if(surfaceSpeed == 0.0 && angularSpeed == 0.0) return 0.02;
-        // The nearest bounding-box distance is a conservative footprint scale.
-        // A box can enclose empty space (e.g. a ring); avoid a zero step there.
-        const double distance = std::max(m_bounds.exteriorDistance(gunPositionInWorkpiece), 0.001);
+        double distance = m_bounds.exteriorDistance(gunPositionInWorkpiece);
+        if(m_surfaceDistance) {
+            const double movement = (gunPositionInWorkpiece - m_queryPosition).norm();
+            if(m_queryDistance < 0.0 || movement > 0.05 * m_queryDistance) {
+                m_queryPosition = gunPositionInWorkpiece;
+                m_queryDistance = m_surfaceDistance(gunPositionInWorkpiece);
+                distance = m_queryDistance;
+            } else {
+                // Distance to a fixed surface is 1-Lipschitz. Reuse a conservative
+                // lower bound until a meaningful movement warrants another BVH query.
+                distance = m_queryDistance - movement;
+            }
+        }
+        distance = std::max(distance, 0.001);
         const double angularRate = angularSpeed + surfaceSpeed / distance;
         return std::min(0.02, m_maximumAngularStep / angularRate);
     }
 
     void OnlineRandomWorkpieceRotation::reset(
-        const Eigen::Vector3d& center, double rpm, std::uint32_t seed)
+        const Eigen::Vector3d& center, double rpm, std::uint32_t seed,
+        const Eigen::Vector3d& initialAxis)
     {
         m_center = center;
+        m_initialAxis = initialAxis;
         m_rpm = rpm;
         m_seed = seed;
         m_random.seed(seed);
@@ -77,7 +109,7 @@ namespace robot_qt_viewer
         m_axisSegment = 0;
         m_lastTimeSeconds = 0.0;
         m_rotation = Eigen::Quaterniond::Identity();
-        m_fromAxis = randomAxis();
+        m_fromAxis = initialAxis.squaredNorm() > 0.0 ? initialAxis.normalized() : randomAxis();
         m_toAxis = randomAxis();
         m_axisArc = Eigen::Quaterniond::FromTwoVectors(m_fromAxis, m_toAxis);
         m_axis = m_fromAxis;
@@ -113,7 +145,7 @@ namespace robot_qt_viewer
     Eigen::Isometry3d OnlineRandomWorkpieceRotation::poseAt(double timeSeconds)
     {
         timeSeconds = std::max(0.0, timeSeconds);
-        if(timeSeconds < m_lastTimeSeconds) reset(m_center, m_rpm, m_seed);
+        if(timeSeconds < m_lastTimeSeconds) reset(m_center, m_rpm, m_seed, m_initialAxis);
         const double angularSpeed = m_rpm * (2.0 * std::acos(-1.0) / 60.0);
         const auto completeSteps = static_cast<std::uint64_t>(
             timeSeconds / kRotationStepSeconds);
@@ -138,6 +170,76 @@ namespace robot_qt_viewer
         pose.linear() = rotation.toRotationMatrix();
         pose.translation() = m_center - pose.linear() * m_center;
         return pose;
+    }
+
+    void OnlineReciprocatingGunMotion::reset(const Eigen::Vector3d& start,
+        const Eigen::Vector3d& end, double speedMetersPerSecond, double activeTimeSeconds)
+    {
+        m_start = m_referencePosition = start;
+        m_end = end;
+        m_speed = speedMetersPerSecond;
+        m_referenceTimeSeconds = activeTimeSeconds;
+        m_targetIsEnd = true;
+    }
+
+    double OnlineReciprocatingGunMotion::entryTravelTimeSeconds() const
+    {
+        return onlineGunTravelTimeSeconds(m_referencePosition,
+            m_targetIsEnd ? m_end : m_start, m_speed);
+    }
+
+    bool OnlineReciprocatingGunMotion::targetIsEndAt(double activeTimeSeconds) const
+    {
+        const double afterEntry = activeTimeSeconds - m_referenceTimeSeconds - entryTravelTimeSeconds();
+        if(afterEntry < 0.0) return m_targetIsEnd;
+        const double travel = onlineGunTravelTimeSeconds(m_start, m_end, m_speed);
+        if(travel <= 0.0) return m_targetIsEnd;
+        const auto legs = static_cast<std::uint64_t>(std::floor(afterEntry / travel));
+        return legs % 2 == 0 ? !m_targetIsEnd : m_targetIsEnd;
+    }
+
+    void OnlineReciprocatingGunMotion::reconfigure(double activeTimeSeconds,
+        const Eigen::Vector3d& start, const Eigen::Vector3d& end, double speedMetersPerSecond)
+    {
+        const Eigen::Vector3d position = positionAt(activeTimeSeconds);
+        const bool samePath = start.isApprox(m_start, 1.0e-12) && end.isApprox(m_end, 1.0e-12);
+        const bool targetIsEnd = samePath ? targetIsEndAt(activeTimeSeconds) : true;
+        m_start = start;
+        m_end = end;
+        m_referencePosition = position;
+        m_referenceTimeSeconds = activeTimeSeconds;
+        m_speed = speedMetersPerSecond;
+        m_targetIsEnd = targetIsEnd;
+    }
+
+    Eigen::Vector3d OnlineReciprocatingGunMotion::positionAt(double activeTimeSeconds) const
+    {
+        const double elapsed = std::max(0.0, activeTimeSeconds - m_referenceTimeSeconds);
+        const double entry = entryTravelTimeSeconds();
+        if(elapsed <= entry && entry > 0.0) {
+            const Eigen::Vector3d target = m_targetIsEnd ? m_end : m_start;
+            return m_referencePosition + (elapsed / entry) * (target - m_referencePosition);
+        }
+        const double travel = onlineGunTravelTimeSeconds(m_start, m_end, m_speed);
+        if(travel <= 0.0) return m_referencePosition;
+        // Reach the new path's target first, then reciprocate on that path.
+        const double phase = std::fmod(elapsed - entry + (m_targetIsEnd ? travel : 0.0),
+            2.0 * travel) / travel;
+        return m_start + (1.0 - std::abs(1.0 - phase)) * (m_end - m_start);
+    }
+
+    double OnlineReciprocatingGunMotion::nextTurnTimeSeconds(double activeTimeSeconds) const
+    {
+        const double entry = entryTravelTimeSeconds();
+        const double elapsed = activeTimeSeconds - m_referenceTimeSeconds;
+        if(entry - elapsed > 8.0 * std::numeric_limits<double>::epsilon()
+                * std::max(1.0, activeTimeSeconds)) return m_referenceTimeSeconds + entry;
+        const double travel = onlineGunTravelTimeSeconds(m_start, m_end, m_speed);
+        double turn = m_referenceTimeSeconds + entry + onlineNextGunTurnTimeSeconds(
+            std::max(0.0, elapsed - entry), travel);
+        if(turn - activeTimeSeconds <= 8.0 * std::numeric_limits<double>::epsilon()
+                * std::max(1.0, activeTimeSeconds)) turn += travel;
+        return turn;
     }
 
     Eigen::Isometry3d onlineRotatingWorkpiecePose(
@@ -176,10 +278,22 @@ namespace robot_qt_viewer
             std::acos(-1.0), Eigen::Vector3d::UnitY()).toRotationMatrix();
         const double travel = onlineGunTravelTimeSeconds(
             startOffset, endOffset, speedMetersPerSecond);
-        const double fraction = travel > 0.0
-            ? std::clamp(timeSeconds / travel, 0.0, 1.0) : 0.0;
+        // Position depends only on physical time, never on display cadence.
+        const double phase = travel > 0.0
+            ? std::fmod(std::max(0.0, timeSeconds), 2.0 * travel) / travel : 0.0;
+        const double fraction = 1.0 - std::abs(1.0 - phase);
         pose.translation() = center + startOffset
             + fraction * (endOffset - startOffset);
         return pose;
+    }
+
+    double onlineNextGunTurnTimeSeconds(double timeSeconds, double travelTimeSeconds)
+    {
+        if(travelTimeSeconds <= 0.0) return std::numeric_limits<double>::infinity();
+        double turn = (std::floor(timeSeconds / travelTimeSeconds) + 1.0) * travelTimeSeconds;
+        // Avoid a duplicate endpoint caused by division/multiplication roundoff.
+        if(turn - timeSeconds <= 8.0 * std::numeric_limits<double>::epsilon()
+                * std::max(1.0, timeSeconds)) turn += travelTimeSeconds;
+        return turn;
     }
 }

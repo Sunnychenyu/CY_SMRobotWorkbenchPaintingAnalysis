@@ -30,7 +30,6 @@ class QTabWidget;
 namespace robot_qt_viewer
 {
     enum class OnlinePoseSource { LiveRws, Virtual };
-    enum class OnlineVirtualMotion { RotatingWorkpiece, MovingGun };
 
     class DepositionCurveWidget;
 
@@ -80,7 +79,9 @@ namespace robot_qt_viewer
         explicit CoatingAnalysisPanel(QWidget* parent = nullptr);
         void applyViewModel(const CoatingAnalysisViewModel& viewModel);
         void setLanguageCode(const QString& languageCode);
-        void setOnlinePredictionState(bool active, bool spraying, const QString& status);
+        void setOnlinePredictionState(bool active, bool spraying, const QString& status,
+            bool finishing = false);
+        void setOnlineMotionState(bool movingGun, bool rotating);
         void setOnlineDiagnostics(const QString& summary, const QString& filePath);
         void setOnlineRandomRotationState(const Eigen::Vector3d& axis, std::uint32_t seed);
         void setOnlineRefreshStatistics(double sceneFramesPerSecond,
@@ -88,7 +89,10 @@ namespace robot_qt_viewer
             bool waitingForFirstFrame, double viewportFramesPerSecond = 0.0,
             double frameIntervalP95Milliseconds = -1.0,
             double maximumFrameIntervalMilliseconds = -1.0,
-            double screenRefreshRate = 0.0);
+            double screenRefreshRate = 0.0, double computeFramesPerSecond = 0.0,
+            double averageIntervalMilliseconds = -1.0, double p99Milliseconds = -1.0,
+            double backlogMilliseconds = 0.0);
+        int onlineFramesPerSecondLimit() const;
 
         spraythickness::ThicknessModelKind thicknessModel() const;
         Eigen::Vector3d sprayDirectionLocal() const;
@@ -97,8 +101,9 @@ namespace robot_qt_viewer
         Eigen::Vector3d onlinePowderFeedDirectionLocal() const;
         bool onlineBvhOcclusionEnabled() const;
         bool onlineHistoryCorrectionEnabled() const;
+        bool onlineInfluencePreviewEnabled() const;
+        double onlineInfluenceThresholdRatio() const;
         OnlinePoseSource onlinePoseSource() const;
-        OnlineVirtualMotion onlineVirtualMotion() const;
         Eigen::Vector3d onlineRotationAxis() const;
         bool onlineRandomRotationAxisEnabled() const;
         double onlineRotationRpm() const;
@@ -153,8 +158,14 @@ namespace robot_qt_viewer
         void predictionRequested();
         void onlineSprayStartRequested();
         void onlineSprayStopRequested();
+        void onlineGunMovementStartRequested();
+        void onlineGunMovementStopRequested();
+        void onlineRotationStartRequested();
+        void onlineRotationStopRequested();
         void onlineResetRequested();
         void onlineInputChanged();
+        void onlineToolDirectionsChanged();
+        void onlineInfluenceDisplayChanged();
         void cancelPredictionRequested();
         void setReferenceRequested();
         void clearReferenceRequested();
@@ -215,13 +226,18 @@ namespace robot_qt_viewer
         QComboBox* m_algorithmCombo = nullptr;
         QComboBox* m_onlineAlgorithmCombo = nullptr;
         QComboBox* m_onlinePoseSourceCombo = nullptr;
-        QComboBox* m_onlineMotionCombo = nullptr;
+        QPushButton* m_onlineMoveStartButton = nullptr;
+        QPushButton* m_onlineMoveStopButton = nullptr;
+        QPushButton* m_onlineRotationStartButton = nullptr;
+        QPushButton* m_onlineRotationStopButton = nullptr;
         QComboBox* m_onlineRotationAxisCombo = nullptr;
         QLabel* m_onlineRandomRotationLabel = nullptr;
         QDoubleSpinBox* m_onlineRpmSpinBox = nullptr;
         QDoubleSpinBox* m_onlineGunStartSpinBoxes[3]{};
-        QDoubleSpinBox* m_onlineGunEndSpinBoxes[3]{};
+        QComboBox* m_onlineGunMovementDirectionCombo = nullptr;
+        QDoubleSpinBox* m_onlineGunDistanceSpinBox = nullptr;
         QDoubleSpinBox* m_onlineGunSpeedSpinBox = nullptr;
+        QSpinBox* m_onlineFpsLimitSpinBox = nullptr;
         QWidget* m_onlineRotationOptions = nullptr;
         QWidget* m_onlineVirtualOptions = nullptr;
         QWidget* m_onlineGunOptions = nullptr;
@@ -231,6 +247,8 @@ namespace robot_qt_viewer
         QComboBox* m_onlinePowderFeedDirectionCombo = nullptr;
         QCheckBox* m_onlineBvhCheckBox = nullptr;
         QCheckBox* m_onlineHistoryCheckBox = nullptr;
+        QCheckBox* m_onlineInfluenceCheckBox = nullptr;
+        QDoubleSpinBox* m_onlineInfluenceThresholdSpinBox = nullptr;
         QPushButton* m_onlineStartButton = nullptr;
         QPushButton* m_onlineStopButton = nullptr;
         QLabel* m_onlineStatusLabel = nullptr;
@@ -240,6 +258,10 @@ namespace robot_qt_viewer
         QString m_onlineDiagnosticsPath;
         bool m_onlineActive = false;
         bool m_onlineSpraying = false;
+        bool m_onlineFinishing = false;
+        bool m_onlineMovingGun = false;
+        bool m_onlineRotating = false;
+        bool m_onlineOtherTaskRunning = false;
         void updateOnlineInputUi();
         QComboBox* m_sprayDirectionCombo = nullptr;
         QComboBox* m_powderFeedDirectionCombo = nullptr;

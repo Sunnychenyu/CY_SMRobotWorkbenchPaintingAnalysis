@@ -10,6 +10,9 @@
 #include <QLabel>
 #include <QToolButton>
 #include <QThread>
+#include <QComboBox>
+#include <QDoubleSpinBox>
+#include <QPushButton>
 
 #include <chrono>
 #include <algorithm>
@@ -39,6 +42,100 @@ namespace
         readouts.predictionTiming.valid = true;
         readouts.predictionTiming.predictionVertexCount = 1584740;
         panel.setLanguageCode(QStringLiteral("zh-CN"));
+        auto* rotationStart = panel.findChild<QPushButton*>(QStringLiteral("onlineStartRotating"));
+        auto* rotationStop = panel.findChild<QPushButton*>(QStringLiteral("onlineStopRotating"));
+        auto* movementStart = panel.findChild<QPushButton*>(QStringLiteral("onlineStartMoving"));
+        auto* movementStop = panel.findChild<QPushButton*>(QStringLiteral("onlineStopMoving"));
+        auto* direction = panel.findChild<QComboBox*>(QStringLiteral("onlineGunMovementDirection"));
+        auto* distance = panel.findChild<QDoubleSpinBox*>(QStringLiteral("onlineGunTravelDistance"));
+        auto* speed = panel.findChild<QDoubleSpinBox*>(QStringLiteral("onlineGunSpeed"));
+        auto* rpm = panel.findChild<QDoubleSpinBox*>(QStringLiteral("onlineRotationRpm"));
+        auto* axis = panel.findChild<QComboBox*>(QStringLiteral("onlineRotationAxis"));
+        auto* gunStartX = panel.findChild<QDoubleSpinBox*>(QStringLiteral("onlineGunStartX"));
+        auto* startButton = panel.findChild<QPushButton*>(QStringLiteral("onlineStartSpraying"));
+        auto* stopButton = panel.findChild<QPushButton*>(QStringLiteral("onlineStopSpraying"));
+        auto* sprayDirection = panel.findChild<QComboBox*>(QStringLiteral("onlineSprayDirection"));
+        auto* powderDirection = panel.findChild<QComboBox*>(QStringLiteral("onlinePowderFeedDirection"));
+        if(!rotationStart || !rotationStop || !movementStart || !movementStop
+            || !direction || !distance || !speed || !rpm || !axis || !gunStartX || !startButton || !stopButton
+            || !sprayDirection || !powderDirection)
+            return false;
+        panel.applyViewModel(view);
+        // Parameters stay visible before any motion or spraying starts.
+        if(direction->parentWidget()->isHidden() || speed->parentWidget()->isHidden()
+            || !movementStart->isEnabled() || movementStop->isEnabled()
+            || !rotationStart->isEnabled() || rotationStop->isEnabled()) return false;
+        distance->setValue(40.0);
+        speed->setValue(25.0);
+        direction->setCurrentIndex(direction->findText(QStringLiteral("-Y")));
+        if((panel.onlineGunEndOffsetMeters() - panel.onlineGunStartOffsetMeters()
+                - Eigen::Vector3d(0.0, -0.04, 0.0)).norm() > 1.0e-12
+            || std::abs(panel.onlineGunSpeedMetersPerSecond() - 0.025) > 1.0e-12) return false;
+        panel.setLanguageCode(QStringLiteral("en"));
+        panel.setLanguageCode(QStringLiteral("zh-CN"));
+        if(direction->currentText() != QStringLiteral("-Y"))
+            return false;
+        int moveRequests = 0, rotateRequests = 0, sprayRequests = 0;
+        QObject::connect(&panel, &robot_qt_viewer::CoatingAnalysisPanel::onlineGunMovementStartRequested,
+            [&]() { ++moveRequests; });
+        QObject::connect(&panel, &robot_qt_viewer::CoatingAnalysisPanel::onlineRotationStartRequested,
+            [&]() { ++rotateRequests; });
+        QObject::connect(&panel, &robot_qt_viewer::CoatingAnalysisPanel::onlineSprayStartRequested,
+            [&]() { ++sprayRequests; });
+        movementStart->click();
+        rotationStart->click();
+        if(moveRequests != 1 || rotateRequests != 1 || sprayRequests != 0) return false;
+        panel.setOnlinePredictionState(true, false, QStringLiteral("Online accumulation paused."));
+        panel.setOnlineMotionState(true, true);
+        if(!direction->isEnabled() || !distance->isEnabled() || !speed->isEnabled()
+            || !rpm->isEnabled() || !axis->isEnabled() || !gunStartX->isEnabled()) return false;
+        int inputChanges = 0;
+        QObject::connect(&panel, &robot_qt_viewer::CoatingAnalysisPanel::onlineInputChanged,
+            [&]() { ++inputChanges; });
+        speed->setValue(40.0);
+        rpm->setValue(120.0);
+        axis->setCurrentIndex(0);
+        if(inputChanges != 3 || panel.onlineRotationRpm() != 120.0
+            || std::abs(panel.onlineGunSpeedMetersPerSecond() - 0.04) > 1.0e-12) return false;
+        panel.setLanguageCode(QStringLiteral("en"));
+        panel.setLanguageCode(QStringLiteral("zh-CN"));
+        if(movementStart->isEnabled() || !movementStop->isEnabled()
+            || rotationStart->isEnabled() || !rotationStop->isEnabled()
+            || !startButton->isEnabled() || stopButton->isEnabled()) return false;
+        panel.setOnlineMotionState(false, true);
+        if(!movementStart->isEnabled() || movementStop->isEnabled()
+            || rotationStart->isEnabled() || !rotationStop->isEnabled()) return false;
+        panel.setOnlinePredictionState(true, false,
+            QStringLiteral("Spraying stopped; finalizing submitted results."), true);
+        panel.applyViewModel(view);
+        if(startButton->isEnabled() || stopButton->isEnabled()
+            || movementStart->isEnabled() || rotationStart->isEnabled()
+            || !rotationStop->isEnabled()) return false;
+        panel.setOnlinePredictionState(true, false, QStringLiteral("Online accumulation paused."));
+        if(!startButton->isEnabled() || stopButton->isEnabled()) return false;
+        panel.setOnlineMotionState(false, false);
+        panel.setOnlinePredictionState(true, true, QStringLiteral("Online accumulation active."));
+        panel.applyViewModel(view);
+        if(!direction->isEnabled() || !distance->isEnabled() || !speed->isEnabled()
+            || !rpm->isEnabled() || !axis->isEnabled() || !gunStartX->isEnabled()
+            || !sprayDirection->isEnabled() || !powderDirection->isEnabled()) return false;
+        int directionChanges = 0;
+        QObject::connect(&panel, &robot_qt_viewer::CoatingAnalysisPanel::onlineToolDirectionsChanged,
+            [&]() { ++directionChanges; });
+        sprayDirection->setCurrentIndex(sprayDirection->findText(QStringLiteral("-Y")));
+        if(directionChanges != 1 || !panel.onlineSprayDirectionLocal().isApprox(-Eigen::Vector3d::UnitY())
+            || !panel.onlinePowderFeedDirectionLocal().isApprox(Eigen::Vector3d::UnitX())) return false;
+        powderDirection->setCurrentIndex(powderDirection->findText(QStringLiteral("+Y")));
+        if(directionChanges != 2 || std::abs(panel.onlineSprayDirectionLocal().dot(
+                panel.onlinePowderFeedDirectionLocal())) > 1.0e-12) return false;
+        powderDirection->setCurrentIndex(powderDirection->findText(QStringLiteral("+Z")));
+        panel.setLanguageCode(QStringLiteral("en"));
+        panel.setLanguageCode(QStringLiteral("zh-CN"));
+        panel.applyViewModel(view);
+        if(directionChanges != 3 || !sprayDirection->isEnabled() || !powderDirection->isEnabled()
+            || sprayDirection->currentText() != QStringLiteral("-Y")
+            || powderDirection->currentText() != QStringLiteral("+Z")) return false;
+        panel.setOnlinePredictionState(true, false, QStringLiteral("Online accumulation paused."));
         info.setLanguageCode(QStringLiteral("zh-CN"));
         info.applyInfo(readouts);
         const auto* modelReadout = info.findChild<QLabel*>(QStringLiteral("ModelReadout"));
@@ -162,6 +259,51 @@ namespace
         return frame;
     }
 
+    bool liveToolDirectionsTest()
+    {
+        robot_qt_viewer::OnlineThicknessPredictionJobController job;
+        std::shared_ptr<const spraythickness::OnlineThicknessSnapshot> result;
+        robot_qt_viewer::OnlinePredictionFrame delivered;
+        QString error;
+        QObject::connect(&job, &robot_qt_viewer::OnlineThicknessPredictionJobController::predictionFailed,
+            [&](const QString& message) { error = message; });
+        QObject::connect(&job, &robot_qt_viewer::OnlineThicknessPredictionJobController::fieldReady,
+            [&](const auto& field, const auto&, const auto& frame) {
+                result = field;
+                delivered = frame;
+                job.acknowledgeFrame(frame.id);
+            });
+        const auto input = task();
+        job.begin(input);
+        const auto waitFor = [&](std::uint64_t id) {
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
+            while(error.isEmpty() && delivered.id != id && std::chrono::steady_clock::now() < deadline) {
+                QGuiApplication::processEvents();
+                QThread::msleep(1);
+            }
+            return error.isEmpty() && result && delivered.id == id && delivered.tool.has_value();
+        };
+        if(!waitFor(job.append(interval(0), frameAt(0.02)))) return false;
+        const double first = result->thicknessMeters(4);
+        if(first <= 0.0 || !delivered.tool->sprayDirectionLocal.isApprox(input.tool.sprayDirectionLocal)) return false;
+        auto frame = frameAt(0.04);
+        frame.tool = input.tool;
+        frame.tool->sprayDirectionLocal = Eigen::Vector3d::UnitZ();
+        frame.tool->powderFeedDirectionLocal = Eigen::Vector3d::UnitY();
+        const auto upwardId = job.append(interval(1), frame);
+        // Mutating the caller's next settings must not change the queued batch.
+        frame.tool->sprayDirectionLocal = -Eigen::Vector3d::UnitZ();
+        if(!waitFor(upwardId) || !delivered.tool->sprayDirectionLocal.isApprox(Eigen::Vector3d::UnitZ())
+            || std::abs(result->thicknessMeters(4) - first) > first * 1.0e-4) return false;
+        frame.timeSeconds = 0.06;
+        if(!waitFor(job.append(interval(2), frame))
+            || !delivered.tool->sprayDirectionLocal.isApprox(-Eigen::Vector3d::UnitZ())
+            || !delivered.tool->powderFeedDirectionLocal.isApprox(Eigen::Vector3d::UnitY())
+            || std::abs(result->thicknessMeters(4) - 2.0 * first) > first * 1.0e-4
+            || result->thicknessMeters(13) != 0.0) return false;
+        return true;
+    }
+
     bool randomRotationDepositionTest()
     {
         robot_qt_viewer::OnlineRandomWorkpieceRotation motion;
@@ -178,10 +320,13 @@ namespace
             frame.timeSeconds = time;
             frame.tablePose = motion.poseAt(time);
             frame.gunPose = gun;
+            frame.gunPose.translation() = robot_qt_viewer::onlineVirtualGunPose(
+                Eigen::Vector3d::Zero(), Eigen::Vector3d(-0.005, 0.0, 0.12),
+                Eigen::Vector3d(0.005, 0.0, 0.12), 0.01, time).translation();
             frame.rotationAxis = motion.axis();
             spraytrajectory::SprayPathPoint point;
             point.time = time;
-            point.tcpPose = frame.tablePose.inverse() * gun;
+            point.tcpPose = frame.tablePose.inverse() * frame.gunPose;
             point.sprayEnabled = true;
             points.push_back(point);
             frames.push_back(frame);
@@ -239,7 +384,7 @@ namespace
             if(!std::isfinite(a) || !std::isfinite(b) || a < 0.0 || b < 0.0
                 || std::abs(a - b) > std::max(1.0e-12, std::abs(a) * 1.0e-4)) return false;
         }
-        std::cout << "Random rotation: changing-axis relative poses, upper-plane deposition, "
+        std::cout << "Random rotation with reciprocating gun: relative poses, upper-plane deposition, "
             "lower-center occlusion, irregular tail and batch invariance passed.\n";
         return true;
     }
@@ -395,10 +540,30 @@ int main(int argc, char** argv)
     job.acknowledgeFrame(resetFrameId);
     if(!waitFor(2) || std::abs(displayedFrame.timeSeconds - 0.055) > 1.0e-12
         || std::abs(final->thicknessMeters(4) - 2.75 * first) > first * 0.01) return 1;
+    // Stopping publishes full final statistics at the last accepted time.
+    // A large wall-clock backlog must not be represented by an extra interval.
+    const auto beforeStop = final;
+    const auto submittedFrameId = displayedFrame.id;
+    auto stoppedFrame = frameAt(0.055);
+    stoppedFrame.finalInterval = true;
+    const auto finalFrameId = job.append({}, stoppedFrame);
+    job.acknowledgeFrame(submittedFrameId);
+    const auto stopDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
+    while(error.isEmpty() && displayedFrame.id != finalFrameId
+        && std::chrono::steady_clock::now() < stopDeadline) {
+        QGuiApplication::processEvents();
+        QThread::msleep(1);
+    }
+    if(!error.isEmpty() || displayedFrame.id != finalFrameId
+        || !displayedFrame.statisticsUpdated || displayedFrame.processedSprayPointCount != 0
+        || final->timing.sprayPointCount != 2 || displayedFrame.timeSeconds != 0.055) return 1;
+    for(std::size_t i = 0; i < final->size(); ++i) {
+        if(final->thicknessMeters(i) != beforeStop->thicknessMeters(i)) return 1;
+    }
     // Reset also releases a worker waiting for an unpresented frame.
     job.reset();
     std::cout << "Streaming: presentation backpressure; matching poses; 50 intervals conserved; "
         "lower plane occluded; irregular tail and stale-frame reset passed; deliveries="
         << deliveries << '\n';
-    return invalid || !randomRotationDepositionTest() ? 1 : 0;
+    return invalid || !liveToolDirectionsTest() || !randomRotationDepositionTest() ? 1 : 0;
 }

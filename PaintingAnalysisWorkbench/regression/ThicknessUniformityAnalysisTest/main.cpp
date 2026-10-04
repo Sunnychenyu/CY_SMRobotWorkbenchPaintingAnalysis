@@ -81,6 +81,19 @@ int main()
     if(robot_qt_viewer::calculateThicknessUniformityStatistics(compact, 0.0, 1.0).valid)
         return 5;
 
+    spraythickness::OnlineThicknessSnapshot resident;
+    resident.residentVertexCount = 4;
+    resident.finiteVertexCount = 3;
+    resident.metrics.minThickness = 0.001;
+    resident.metrics.maxThickness = 0.003;
+    resident.metrics.averageThickness = 0.002;
+    resident.varianceSquareMeters = 2.0e-6 / 3.0;
+    const auto gpuStatistics = robot_qt_viewer::calculateThicknessUniformityStatistics(resident, 0.001, 0.003);
+    if(!gpuStatistics.valid || !nearlyEqual(gpuStatistics.includedRatio, 0.75)
+        || !nearlyEqual(gpuStatistics.varianceSquareMeters, resident.varianceSquareMeters)
+        || !gpuStatistics.coefficientOfVariationValid || !resident.thicknessMillimeters.empty()) return 7;
+    if(robot_qt_viewer::calculateThicknessUniformityStatistics(resident, 0.002, 0.003).valid) return 8;
+
     spraythickness::ThicknessMetricsAccumulator all, first, second, emptyMetrics;
     for(std::size_t i = 0; i < 101; ++i) {
         auto value = sample(i, static_cast<double>(i) * 0.001);

@@ -16,7 +16,8 @@ namespace robot_qt_viewer
         Readback, ResultConversion, GpuTimerWait, Statistics, Mapping,
         DeliveryQueue, PreviousPresentation, Pacing, GuiResult, GuiPose, GuiOverlay,
         GuiInfo, PaintQueue, SceneUpdate, DrawSubmission, SwapWait, GuiTimerDelay,
-        GuiPreparation, ContextPreparation, BackendInitialization, Count
+        GuiPreparation, ContextPreparation, BackendInitialization,
+        GpuDisplayCopy, GpuStatistics, GpuCompletionWait, GpuScalarDraw, Count
     };
 
     struct OnlineDiagnosticFrame
@@ -27,6 +28,13 @@ namespace robot_qt_viewer
         double inputToPresentMilliseconds = 0.0;
         double expectedIntervalMilliseconds = 0.0;
         bool displayed = false;
+        bool gpuResidentDisplay = false;
+        std::size_t thicknessReadbackBytes = 0;
+        std::size_t statisticsReadbackBytes = 0;
+        std::size_t scalarUploadBytes = 0;
+        double integratedMilliseconds = 0.0;
+        double computeBacklogMilliseconds = 0.0;
+        double physicalTimeSeconds = 0.0;
         std::array<double, static_cast<std::size_t>(OnlineDiagnosticStage::Count)> stages{};
 
         double& at(OnlineDiagnosticStage stage) { return stages[static_cast<std::size_t>(stage)]; }
@@ -46,6 +54,7 @@ namespace robot_qt_viewer
         void heartbeat();
         void checkWaitingPhase(const QString& phase, double milliseconds);
         void record(OnlineDiagnosticFrame frame, std::chrono::steady_clock::time_point presentedAt);
+        void gpuDraw(std::uint64_t frameId, double milliseconds);
         void finish(const QString& reason);
         bool active() const;
         QString summary() const;

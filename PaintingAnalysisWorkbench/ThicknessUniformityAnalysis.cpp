@@ -124,6 +124,29 @@ namespace robot_qt_viewer
         const spraythickness::OnlineThicknessSnapshot& snapshot,
         double minimumThicknessMeters, double maximumThicknessMeters)
     {
+        if(snapshot.residentVertexCount) {
+            ThicknessUniformityStatistics statistics;
+            statistics.totalVertexCount = snapshot.size();
+            // Online mode uses the automatic full range. A narrower range needs
+            // a new GPU reduction, never an implicit full-array CPU download.
+            if(snapshot.finiteVertexCount == 0
+                || minimumThicknessMeters > snapshot.metrics.minThickness
+                || maximumThicknessMeters < snapshot.metrics.maxThickness) return statistics;
+            statistics.includedVertexCount = snapshot.finiteVertexCount;
+            statistics.includedRatio = static_cast<double>(snapshot.finiteVertexCount) / snapshot.size();
+            statistics.minimumThicknessMeters = snapshot.metrics.minThickness;
+            statistics.maximumThicknessMeters = snapshot.metrics.maxThickness;
+            statistics.meanThicknessMeters = snapshot.metrics.averageThickness;
+            statistics.varianceSquareMeters = snapshot.varianceSquareMeters;
+            statistics.standardDeviationMeters = std::sqrt(std::max(0.0, snapshot.varianceSquareMeters));
+            statistics.coefficientOfVariationValid = std::abs(statistics.meanThicknessMeters) > 1.0e-15;
+            if(statistics.coefficientOfVariationValid) {
+                statistics.coefficientOfVariation = statistics.standardDeviationMeters
+                    / std::abs(statistics.meanThicknessMeters);
+            }
+            statistics.valid = true;
+            return statistics;
+        }
         return calculateUniformity(snapshot.size(),
             [&](std::size_t index) { return snapshot.thicknessMeters(index); },
             minimumThicknessMeters, maximumThicknessMeters);

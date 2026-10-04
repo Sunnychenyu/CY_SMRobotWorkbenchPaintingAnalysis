@@ -1052,11 +1052,6 @@ namespace robot_qt_viewer
             static_cast<int>(OnlinePoseSource::Virtual));
         m_onlinePoseSourceCombo->addItem(QStringLiteral("Live RWS"),
             static_cast<int>(OnlinePoseSource::LiveRws));
-        m_onlineMotionCombo = new QComboBox(onlineGroup);
-        m_onlineMotionCombo->addItem(QStringLiteral("Fixed gun / rotating workpiece"),
-            static_cast<int>(OnlineVirtualMotion::RotatingWorkpiece));
-        m_onlineMotionCombo->addItem(QStringLiteral("Fixed workpiece / moving gun"),
-            static_cast<int>(OnlineVirtualMotion::MovingGun));
         m_onlineRotationOptions = new QWidget(onlineGroup);
         auto* rotationForm = new QFormLayout(m_onlineRotationOptions);
         rotationForm->setContentsMargins(0, 0, 0, 0);
@@ -1070,8 +1065,10 @@ namespace robot_qt_viewer
         m_onlineRotationAxisCombo->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
         m_onlineRotationAxisCombo->setCurrentIndex(2);
         m_onlineRpmSpinBox = new QDoubleSpinBox(m_onlineRotationOptions);
+        m_onlineRpmSpinBox->setObjectName(QStringLiteral("onlineRotationRpm"));
         m_onlineRpmSpinBox->setRange(-1000.0, 1000.0);
         m_onlineRpmSpinBox->setValue(30.0);
+        m_onlineRpmSpinBox->setKeyboardTracking(false);
         m_onlineRpmSpinBox->setSuffix(QStringLiteral(" rpm"));
         rotationForm->addRow(QStringLiteral("Rotation axis"),
             m_onlineRotationAxisCombo);
@@ -1088,41 +1085,85 @@ namespace robot_qt_viewer
         gunEndForm->setContentsMargins(0, 0, 0, 0);
         for(int axis = 0; axis < 3; ++axis) {
             m_onlineGunStartSpinBoxes[axis] = new QDoubleSpinBox(m_onlineGunOptions);
-            m_onlineGunEndSpinBoxes[axis] = new QDoubleSpinBox(m_onlineGunEndOptions);
-            for(QDoubleSpinBox* spin : { m_onlineGunStartSpinBoxes[axis],
-                     m_onlineGunEndSpinBoxes[axis] }) {
-                spin->setRange(-100000.0, 100000.0);
-                spin->setDecimals(2);
-                spin->setSuffix(QStringLiteral(" mm"));
-            }
+            m_onlineGunStartSpinBoxes[axis]->setObjectName(QStringLiteral("onlineGunStart%1")
+                .arg(QStringLiteral("XYZ").at(axis)));
+            m_onlineGunStartSpinBoxes[axis]->setRange(-100000.0, 100000.0);
+            m_onlineGunStartSpinBoxes[axis]->setDecimals(2);
+            m_onlineGunStartSpinBoxes[axis]->setSuffix(QStringLiteral(" mm"));
+            m_onlineGunStartSpinBoxes[axis]->setKeyboardTracking(false);
         }
         m_onlineGunStartSpinBoxes[2]->setValue(110.0);
-        m_onlineGunEndSpinBoxes[0]->setValue(50.0);
-        m_onlineGunEndSpinBoxes[2]->setValue(110.0);
+        m_onlineGunMovementDirectionCombo = new QComboBox(m_onlineGunEndOptions);
+        m_onlineGunMovementDirectionCombo->setObjectName(QStringLiteral("onlineGunMovementDirection"));
+        populateLocalAxisCombo(*m_onlineGunMovementDirectionCombo, PositiveX);
+        m_onlineGunDistanceSpinBox = new QDoubleSpinBox(m_onlineGunEndOptions);
+        m_onlineGunDistanceSpinBox->setObjectName(QStringLiteral("onlineGunTravelDistance"));
+        m_onlineGunDistanceSpinBox->setRange(0.01, 100000.0);
+        m_onlineGunDistanceSpinBox->setDecimals(2);
+        m_onlineGunDistanceSpinBox->setValue(50.0);
+        m_onlineGunDistanceSpinBox->setKeyboardTracking(false);
+        m_onlineGunDistanceSpinBox->setSuffix(QStringLiteral(" mm"));
         m_onlineGunSpeedSpinBox = new QDoubleSpinBox(m_onlineGunEndOptions);
+        m_onlineGunSpeedSpinBox->setObjectName(QStringLiteral("onlineGunSpeed"));
         m_onlineGunSpeedSpinBox->setRange(0.01, 10000.0);
         m_onlineGunSpeedSpinBox->setValue(50.0);
+        m_onlineGunSpeedSpinBox->setKeyboardTracking(false);
         m_onlineGunSpeedSpinBox->setSuffix(QStringLiteral(" mm/s"));
         for(int axis = 0; axis < 3; ++axis) {
             const QString suffix = QStringLiteral(" %1").arg(
                 QStringLiteral("XYZ").at(axis));
             gunForm->addRow(QStringLiteral("Start") + suffix,
                 m_onlineGunStartSpinBoxes[axis]);
-            gunEndForm->addRow(QStringLiteral("End") + suffix,
-                m_onlineGunEndSpinBoxes[axis]);
         }
+        gunEndForm->addRow(QStringLiteral("Movement direction (world)"), m_onlineGunMovementDirectionCombo);
+        gunEndForm->addRow(QStringLiteral("One-way distance"), m_onlineGunDistanceSpinBox);
         gunEndForm->addRow(QStringLiteral("Gun speed"), m_onlineGunSpeedSpinBox);
+        auto* motionHint = new QLabel(QStringLiteral(
+            "Moves between the start and target at constant speed; reverses immediately. "
+            "Gun orientation stays fixed. Can run together with workpiece rotation."), m_onlineGunEndOptions);
+        motionHint->setWordWrap(true);
+        motionHint->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+        gunEndForm->addRow(motionHint);
         m_onlineVirtualOptions = new QWidget(onlineGroup);
         auto* virtualLayout = new QVBoxLayout(m_onlineVirtualOptions);
         virtualLayout->setContentsMargins(0, 0, 0, 0);
-        auto* virtualForm = new QFormLayout();
-        virtualForm->addRow(QStringLiteral("Virtual motion"), m_onlineMotionCombo);
-        virtualLayout->addLayout(virtualForm);
-        virtualLayout->addWidget(m_onlineGunOptions);
-        virtualLayout->addWidget(m_onlineRotationOptions);
-        virtualLayout->addWidget(m_onlineGunEndOptions);
+        auto* movementGroup = new QGroupBox(QStringLiteral("Spray point movement"), m_onlineVirtualOptions);
+        auto* movementLayout = new QVBoxLayout(movementGroup);
+        movementLayout->addWidget(m_onlineGunOptions);
+        movementLayout->addWidget(m_onlineGunEndOptions);
+        auto* movementButtons = new QHBoxLayout();
+        m_onlineMoveStartButton = new QPushButton(QStringLiteral("Start moving"), movementGroup);
+        m_onlineMoveStopButton = new QPushButton(QStringLiteral("Stop moving"), movementGroup);
+        m_onlineMoveStartButton->setObjectName(QStringLiteral("onlineStartMoving"));
+        m_onlineMoveStopButton->setObjectName(QStringLiteral("onlineStopMoving"));
+        movementButtons->addWidget(m_onlineMoveStartButton);
+        movementButtons->addWidget(m_onlineMoveStopButton);
+        movementLayout->addLayout(movementButtons);
+        auto* rotationGroup = new QGroupBox(QStringLiteral("Workpiece rotation"), m_onlineVirtualOptions);
+        auto* rotationLayout = new QVBoxLayout(rotationGroup);
+        rotationLayout->addWidget(m_onlineRotationOptions);
+        auto* rotationButtons = new QHBoxLayout();
+        m_onlineRotationStartButton = new QPushButton(QStringLiteral("Start rotating"), rotationGroup);
+        m_onlineRotationStopButton = new QPushButton(QStringLiteral("Stop rotating"), rotationGroup);
+        m_onlineRotationStartButton->setObjectName(QStringLiteral("onlineStartRotating"));
+        m_onlineRotationStopButton->setObjectName(QStringLiteral("onlineStopRotating"));
+        rotationButtons->addWidget(m_onlineRotationStartButton);
+        rotationButtons->addWidget(m_onlineRotationStopButton);
+        rotationLayout->addLayout(rotationButtons);
+        virtualLayout->addWidget(movementGroup);
+        virtualLayout->addWidget(rotationGroup);
+        auto* liveMotionHint = new QLabel(QStringLiteral(
+            "Motion parameters remain editable. Press Enter or finish editing to apply. "
+            "Speed and axis changes preserve the current pose. Direction/distance changes "
+            "move toward the new target before reciprocating. Editing Start repositions the gun."),
+            m_onlineVirtualOptions);
+        liveMotionHint->setWordWrap(true);
+        liveMotionHint->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+        virtualLayout->addWidget(liveMotionHint);
         m_onlineSprayDirectionCombo = new QComboBox(onlineGroup);
         m_onlinePowderFeedDirectionCombo = new QComboBox(onlineGroup);
+        m_onlineSprayDirectionCombo->setObjectName(QStringLiteral("onlineSprayDirection"));
+        m_onlinePowderFeedDirectionCombo->setObjectName(QStringLiteral("onlinePowderFeedDirection"));
         populateLocalAxisCombo(*m_onlineSprayDirectionCombo, PositiveZ);
         populateLocalAxisCombo(*m_onlinePowderFeedDirectionCombo, PositiveY);
         m_onlineBvhCheckBox = new QCheckBox(
@@ -1135,6 +1176,12 @@ namespace robot_qt_viewer
         onlineForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
         onlineForm->addRow(QStringLiteral("Pose source"), m_onlinePoseSourceCombo);
         onlineForm->addRow(QStringLiteral("Model"), m_onlineAlgorithmCombo);
+        m_onlineFpsLimitSpinBox = new QSpinBox(onlineGroup);
+        m_onlineFpsLimitSpinBox->setRange(0, 10000);
+        m_onlineFpsLimitSpinBox->setValue(0);
+        m_onlineFpsLimitSpinBox->setSpecialValueText(QStringLiteral("Unlimited"));
+        m_onlineFpsLimitSpinBox->setMinimumWidth(0);
+        onlineForm->addRow(QStringLiteral("Display FPS limit"), m_onlineFpsLimitSpinBox);
         onlineForm->addRow(QStringLiteral("Spray direction"),
             m_onlineSprayDirectionCombo);
         onlineForm->addRow(QStringLiteral("Powder feed direction"),
@@ -1143,9 +1190,34 @@ namespace robot_qt_viewer
         onlineLayout->addWidget(m_onlineVirtualOptions);
         onlineLayout->addWidget(m_onlineBvhCheckBox);
         onlineLayout->addWidget(m_onlineHistoryCheckBox);
+        m_onlineInfluenceCheckBox = new QCheckBox(QStringLiteral("Show deposition influence"), onlineGroup);
+        m_onlineInfluenceCheckBox->setObjectName(QStringLiteral("onlineInfluenceVisible"));
+        m_onlineInfluenceCheckBox->setChecked(true);
+        onlineLayout->addWidget(m_onlineInfluenceCheckBox);
+        auto* influenceForm = new QFormLayout();
+        influenceForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+        m_onlineInfluenceThresholdSpinBox = new QDoubleSpinBox(onlineGroup);
+        m_onlineInfluenceThresholdSpinBox->setObjectName(QStringLiteral("onlineInfluenceThreshold"));
+        m_onlineInfluenceThresholdSpinBox->setRange(0.01, 99.0);
+        m_onlineInfluenceThresholdSpinBox->setDecimals(2);
+        m_onlineInfluenceThresholdSpinBox->setValue(1.0);
+        m_onlineInfluenceThresholdSpinBox->setSuffix(QStringLiteral(" %"));
+        m_onlineInfluenceThresholdSpinBox->setKeyboardTracking(false);
+        m_onlineInfluenceThresholdSpinBox->setToolTip(QStringLiteral(
+            "Percentage of the angular Gaussian peak. Display only; does not change deposition. Preview remains visible after stopping powder."));
+        influenceForm->addRow(QStringLiteral("Influence display threshold"), m_onlineInfluenceThresholdSpinBox);
+        onlineLayout->addLayout(influenceForm);
+        connect(m_onlineInfluenceCheckBox, &QCheckBox::toggled, this, [this](bool checked) {
+            m_onlineInfluenceThresholdSpinBox->setEnabled(checked);
+            emit onlineInfluenceDisplayChanged();
+        });
+        connect(m_onlineInfluenceThresholdSpinBox, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+            this, [this](double) { emit onlineInfluenceDisplayChanged(); });
         auto* onlineButtons = new QHBoxLayout();
         m_onlineStartButton = new QPushButton(QStringLiteral("Start spraying"), onlineGroup);
         m_onlineStopButton = new QPushButton(QStringLiteral("Stop spraying"), onlineGroup);
+        m_onlineStartButton->setObjectName(QStringLiteral("onlineStartSpraying"));
+        m_onlineStopButton->setObjectName(QStringLiteral("onlineStopSpraying"));
         m_onlineStartButton->setToolTip(QStringLiteral(
             "Controls thickness accumulation only; no equipment command is sent."));
         m_onlineStopButton->setToolTip(m_onlineStartButton->toolTip());
@@ -1176,40 +1248,49 @@ namespace robot_qt_viewer
         onlineLayout->addWidget(m_onlineDiagnosticsLabel);
         rootLayout->addWidget(onlineGroup);
         m_onlineSections.push_back(onlineGroup);
+        const auto updateOnlineDirections = [this](int) {
+            if(std::abs(onlineSprayDirectionLocal().dot(
+                    onlinePowderFeedDirectionLocal())) >= 0.5) {
+                const int fallback = std::abs(onlineSprayDirectionLocal().y()) < 0.5
+                    ? PositiveY : PositiveX;
+                const QSignalBlocker blocker(m_onlinePowderFeedDirectionCombo);
+                m_onlinePowderFeedDirectionCombo->setCurrentIndex(
+                    m_onlinePowderFeedDirectionCombo->findData(fallback));
+            }
+            emit onlineToolDirectionsChanged();
+        };
         connect(m_onlineSprayDirectionCombo,
-            QOverload<int>::of(&QComboBox::currentIndexChanged),
-            this, [this](int) {
-                if(std::abs(onlineSprayDirectionLocal().dot(
-                        onlinePowderFeedDirectionLocal())) >= 0.5) {
-                    const int fallback =
-                        std::abs(onlineSprayDirectionLocal().y()) < 0.5
-                            ? PositiveY : PositiveX;
-                    const QSignalBlocker blocker(m_onlinePowderFeedDirectionCombo);
-                    m_onlinePowderFeedDirectionCombo->setCurrentIndex(
-                        m_onlinePowderFeedDirectionCombo->findData(fallback));
-                }
-            });
+            QOverload<int>::of(&QComboBox::currentIndexChanged), this, updateOnlineDirections);
+        connect(m_onlinePowderFeedDirectionCombo,
+            QOverload<int>::of(&QComboBox::currentIndexChanged), this, updateOnlineDirections);
         connect(m_onlineStartButton, &QPushButton::clicked,
             this, &CoatingAnalysisPanel::onlineSprayStartRequested);
         connect(m_onlineStopButton, &QPushButton::clicked,
             this, &CoatingAnalysisPanel::onlineSprayStopRequested);
+        connect(m_onlineMoveStartButton, &QPushButton::clicked,
+            this, &CoatingAnalysisPanel::onlineGunMovementStartRequested);
+        connect(m_onlineMoveStopButton, &QPushButton::clicked,
+            this, &CoatingAnalysisPanel::onlineGunMovementStopRequested);
+        connect(m_onlineRotationStartButton, &QPushButton::clicked,
+            this, &CoatingAnalysisPanel::onlineRotationStartRequested);
+        connect(m_onlineRotationStopButton, &QPushButton::clicked,
+            this, &CoatingAnalysisPanel::onlineRotationStopRequested);
         connect(m_onlineResetButton, &QPushButton::clicked,
             this, &CoatingAnalysisPanel::onlineResetRequested);
         connect(m_onlinePoseSourceCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, [this](int) { updateOnlineInputUi(); emit onlineInputChanged(); });
-        connect(m_onlineMotionCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
-            this, [this](int) { updateOnlineInputUi(); emit onlineInputChanged(); });
+        connect(m_onlineGunMovementDirectionCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, [this](int) { emit onlineInputChanged(); });
         connect(m_onlineRotationAxisCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, [this](int) { updateOnlineInputUi(); emit onlineInputChanged(); });
         connect(m_onlineRpmSpinBox, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
             this, [this](double) { emit onlineInputChanged(); });
         for(int axis = 0; axis < 3; ++axis) {
-            for(QDoubleSpinBox* spin : { m_onlineGunStartSpinBoxes[axis],
-                     m_onlineGunEndSpinBoxes[axis] }) {
-                connect(spin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
-                    this, [this](double) { emit onlineInputChanged(); });
-            }
+            connect(m_onlineGunStartSpinBoxes[axis], QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+                this, [this](double) { emit onlineInputChanged(); });
         }
+        connect(m_onlineGunDistanceSpinBox, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+            this, [this](double) { emit onlineInputChanged(); });
         connect(m_onlineGunSpeedSpinBox, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
             this, [this](double) { emit onlineInputChanged(); });
         updateOnlineInputUi();
@@ -1560,6 +1641,7 @@ namespace robot_qt_viewer
         const auto translate = [this](const QString& value) {
             return coatingAnalysisTranslate(m_languageCode, value);
         };
+        m_onlineFpsLimitSpinBox->setSpecialValueText(translate(QStringLiteral("Unlimited")));
         for(QWidget* widget : findChildren<QWidget*>()) {
             if(auto* group = qobject_cast<QGroupBox*>(widget)) {
                 group->setTitle(translate(group->title()));
@@ -1606,23 +1688,34 @@ namespace robot_qt_viewer
     }
 
     void CoatingAnalysisPanel::setOnlinePredictionState(
-        bool active, bool spraying, const QString& status)
+        bool active, bool spraying, const QString& status, bool finishing)
     {
-        const bool stateChanged = m_onlineActive != active || m_onlineSpraying != spraying;
+        const bool stateChanged = m_onlineActive != active || m_onlineSpraying != spraying
+            || m_onlineFinishing != finishing;
         m_onlineActive = active;
         m_onlineSpraying = spraying;
+        m_onlineFinishing = finishing;
         const QString text = coatingAnalysisTranslate(m_languageCode, status);
         if(m_onlineStatusLabel->text() != text) m_onlineStatusLabel->setText(text);
-        m_onlineStartButton->setEnabled(!spraying);
+        m_onlineStartButton->setEnabled(!spraying && !finishing);
         m_onlineStopButton->setEnabled(spraying);
         if(stateChanged) updateOnlineInputUi();
+    }
+
+    void CoatingAnalysisPanel::setOnlineMotionState(bool movingGun, bool rotating)
+    {
+        m_onlineMovingGun = movingGun;
+        m_onlineRotating = rotating;
+        updateOnlineInputUi();
     }
 
     void CoatingAnalysisPanel::setOnlineRefreshStatistics(
         double sceneFramesPerSecond, double thicknessFramesPerSecond,
         double firstFrameMilliseconds, bool waitingForFirstFrame,
         double viewportFramesPerSecond, double frameIntervalP95Milliseconds,
-        double maximumFrameIntervalMilliseconds, double screenRefreshRate)
+        double maximumFrameIntervalMilliseconds, double screenRefreshRate,
+        double computeFramesPerSecond, double averageIntervalMilliseconds,
+        double p99Milliseconds, double backlogMilliseconds)
     {
         const auto translate = [this](const QString& text) {
             return coatingAnalysisTranslate(m_languageCode, text);
@@ -1635,7 +1728,7 @@ namespace robot_qt_viewer
         QString text = QStringLiteral("%1%2 FPS\n%3%4 Hz\n%5%6 FPS\n%7%8")
             .arg(translate(QStringLiteral("Scene submission rate:")))
             .arg(sceneFramesPerSecond, 0, 'f', 1)
-            .arg(translate(QStringLiteral("Cloud submission rate:")))
+            .arg(translate(QStringLiteral("Cloud presentation rate:")))
             .arg(thicknessFramesPerSecond, 0, 'f', 1)
             .arg(translate(QStringLiteral("Viewport draw rate:")))
             .arg(viewportFramesPerSecond, 0, 'f', 1)
@@ -1652,7 +1745,21 @@ namespace robot_qt_viewer
             .arg(milliseconds(maximumFrameIntervalMilliseconds))
             .arg(translate(QStringLiteral("Screen refresh rate:")))
             .arg(screenRefreshRate, 0, 'f', 1);
+        text += QStringLiteral("\n%1%2 FPS\n%3%4\n%5%6\n%7%8")
+            .arg(translate(QStringLiteral("Compute completion rate:")))
+            .arg(computeFramesPerSecond, 0, 'f', 1)
+            .arg(translate(QStringLiteral("Average frame interval:")))
+            .arg(milliseconds(averageIntervalMilliseconds))
+            .arg(translate(QStringLiteral("Frame interval P99:")))
+            .arg(milliseconds(p99Milliseconds))
+            .arg(translate(QStringLiteral("Compute backlog:")))
+            .arg(milliseconds(backlogMilliseconds));
         if(m_onlineRefreshLabel->text() != text) m_onlineRefreshLabel->setText(text);
+    }
+
+    int CoatingAnalysisPanel::onlineFramesPerSecondLimit() const
+    {
+        return m_onlineFpsLimitSpinBox->value();
     }
 
     void CoatingAnalysisPanel::setOnlineRandomRotationState(
@@ -1679,22 +1786,25 @@ namespace robot_qt_viewer
     void CoatingAnalysisPanel::updateOnlineInputUi()
     {
         const bool virtualSource = onlinePoseSource() == OnlinePoseSource::Virtual;
-        const bool rotating = onlineVirtualMotion()
-            == OnlineVirtualMotion::RotatingWorkpiece;
         m_onlineVirtualOptions->setVisible(virtualSource);
-        m_onlineRotationOptions->setVisible(virtualSource && rotating);
+        m_onlineRotationOptions->setVisible(virtualSource);
         m_onlineRandomRotationLabel->setVisible(onlineRandomRotationAxisEnabled());
         if(!m_onlineActive) {
             m_onlineRandomRotationLabel->setText(coatingAnalysisTranslate(m_languageCode,
                 QStringLiteral("Axis direction changes smoothly every 2 s.")));
         }
-        m_onlineGunEndOptions->setVisible(virtualSource && !rotating);
+        m_onlineGunEndOptions->setVisible(virtualSource);
         m_onlinePoseSourceCombo->setEnabled(!m_onlineActive);
-        m_onlineMotionCombo->setEnabled(!m_onlineActive);
-        m_onlineRotationAxisCombo->setEnabled(!m_onlineActive);
-        m_onlineRpmSpinBox->setEnabled(!m_onlineActive);
-        m_onlineVirtualOptions->setEnabled(!m_onlineActive);
-        m_onlineResetButton->setEnabled(m_onlineActive && !m_onlineSpraying);
+        m_onlineRotationAxisCombo->setEnabled(virtualSource);
+        m_onlineRpmSpinBox->setEnabled(virtualSource);
+        m_onlineGunOptions->setEnabled(virtualSource);
+        m_onlineGunEndOptions->setEnabled(virtualSource);
+        const bool canStartMotion = virtualSource && !m_onlineFinishing && !m_onlineOtherTaskRunning;
+        m_onlineMoveStartButton->setEnabled(canStartMotion && !m_onlineMovingGun);
+        m_onlineMoveStopButton->setEnabled(virtualSource && m_onlineMovingGun);
+        m_onlineRotationStartButton->setEnabled(canStartMotion && !m_onlineRotating);
+        m_onlineRotationStopButton->setEnabled(virtualSource && m_onlineRotating);
+        m_onlineResetButton->setEnabled(m_onlineActive && !m_onlineSpraying && !m_onlineFinishing);
     }
 
     void CoatingAnalysisPanel::setModeTab(int index)
@@ -1897,12 +2007,14 @@ namespace robot_qt_viewer
         updateTrajectorySamplingUi();
         m_algorithmCombo->setEnabled(standardControlsEnabled);
         m_onlineAlgorithmCombo->setEnabled(!m_onlineActive && !viewModel.predictionRunning);
-        m_onlineSprayDirectionCombo->setEnabled(!m_onlineActive);
-        m_onlinePowderFeedDirectionCombo->setEnabled(!m_onlineActive);
+        const bool onlineDirectionsEnabled = !viewModel.predictionRunning && !viewModel.reproductionRunning;
+        m_onlineSprayDirectionCombo->setEnabled(onlineDirectionsEnabled);
+        m_onlinePowderFeedDirectionCombo->setEnabled(onlineDirectionsEnabled);
         m_onlineBvhCheckBox->setEnabled(!m_onlineActive);
         m_onlineHistoryCheckBox->setEnabled(!m_onlineActive);
+        m_onlineOtherTaskRunning = viewModel.predictionRunning || viewModel.reproductionRunning;
         updateOnlineInputUi();
-        m_onlineStartButton->setEnabled(!m_onlineSpraying
+        m_onlineStartButton->setEnabled(!m_onlineSpraying && !m_onlineFinishing
             && !viewModel.predictionRunning && !viewModel.reproductionRunning);
         m_onlineStopButton->setEnabled(m_onlineSpraying);
         m_sprayDirectionCombo->setEnabled(standardControlsEnabled);
@@ -2256,14 +2368,19 @@ namespace robot_qt_viewer
         return m_onlineHistoryCheckBox->isChecked();
     }
 
+    bool CoatingAnalysisPanel::onlineInfluencePreviewEnabled() const
+    {
+        return m_onlineInfluenceCheckBox->isChecked();
+    }
+
+    double CoatingAnalysisPanel::onlineInfluenceThresholdRatio() const
+    {
+        return m_onlineInfluenceThresholdSpinBox->value() * 0.01;
+    }
+
     OnlinePoseSource CoatingAnalysisPanel::onlinePoseSource() const
     {
         return static_cast<OnlinePoseSource>(m_onlinePoseSourceCombo->currentData().toInt());
-    }
-
-    OnlineVirtualMotion CoatingAnalysisPanel::onlineVirtualMotion() const
-    {
-        return static_cast<OnlineVirtualMotion>(m_onlineMotionCombo->currentData().toInt());
     }
 
     Eigen::Vector3d CoatingAnalysisPanel::onlineRotationAxis() const
@@ -2291,9 +2408,9 @@ namespace robot_qt_viewer
 
     Eigen::Vector3d CoatingAnalysisPanel::onlineGunEndOffsetMeters() const
     {
-        return Eigen::Vector3d(m_onlineGunEndSpinBoxes[0]->value(),
-            m_onlineGunEndSpinBoxes[1]->value(),
-            m_onlineGunEndSpinBoxes[2]->value()) * 0.001;
+        return onlineGunStartOffsetMeters()
+            + localAxisVector(m_onlineGunMovementDirectionCombo->currentData().toInt())
+                * m_onlineGunDistanceSpinBox->value() * 0.001;
     }
 
     double CoatingAnalysisPanel::onlineGunSpeedMetersPerSecond() const
