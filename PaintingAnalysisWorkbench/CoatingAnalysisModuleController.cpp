@@ -3598,6 +3598,7 @@ namespace robot_qt_viewer
                 m_session.appliedTrajectorySamplingMode;
             task.options.base.timeStep =
                 m_session.appliedTrajectoryTimeStepSeconds;
+            task.options.evaluateMeshSampling = true;
             task.options.enableBvhOcclusion = m_panel.bvhOcclusionEnabled();
             task.options.enableHistoryCorrection = m_panel.historyCorrectionEnabled();
             task.options.periodicLocal.enabled = m_panel.periodicLocalPredictionEnabled();
@@ -7025,6 +7026,9 @@ namespace robot_qt_viewer
         if(m_session.hasResult) {
             infoView.thicknessMetrics = m_session.prediction.metrics;
             infoView.predictionTiming = m_session.prediction.timing;
+            if(m_mode == CoatingAnalysisMode::Prediction) {
+                infoView.meshSamplingAssessment = m_session.prediction.meshSamplingAssessment;
+            }
             infoView.manualThicknessRange = m_session.manualThicknessRange;
             infoView.minimumDisplayThicknessMicrometers =
                 m_session.thicknessOverlay.range.minimum * kMetersToMicrometers;

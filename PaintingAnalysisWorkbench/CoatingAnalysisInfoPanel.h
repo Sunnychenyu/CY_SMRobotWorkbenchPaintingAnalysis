@@ -31,11 +31,14 @@ namespace robot_qt_viewer
             QWidget*& content);
         void setSectionTitle(QToolButton* section, const QString& title);
         void setReadout(QLabel* label, const QString& text);
+        void applyMeshSamplingInfo(const CoatingAnalysisInfoView& view);
 
         QToolButton* m_modelSection = nullptr;
         QToolButton* m_trajectorySection = nullptr;
         QToolButton* m_validationSection = nullptr;
         QToolButton* m_simulationSection = nullptr;
+        QToolButton* m_meshSamplingSection = nullptr;
+        QWidget* m_meshSamplingContent = nullptr;
         QWidget* m_modelContent = nullptr;
         QWidget* m_trajectoryContent = nullptr;
         QWidget* m_validationContent = nullptr;
@@ -46,6 +49,7 @@ namespace robot_qt_viewer
         QLabel* m_historyReadout = nullptr;
         QLabel* m_thicknessReadout = nullptr;
         QLabel* m_analysisReadout = nullptr;
+        QLabel* m_meshSamplingReadout = nullptr;
         QLabel* m_computationReadout = nullptr;
         QLabel* m_validationReadout = nullptr;
         QLabel* m_simulationReadout = nullptr;

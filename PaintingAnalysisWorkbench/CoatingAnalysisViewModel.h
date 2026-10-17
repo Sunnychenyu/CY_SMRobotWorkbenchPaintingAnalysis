@@ -97,6 +97,7 @@ namespace robot_qt_viewer
         double predictionElapsedSeconds = 0.0;
         spraythickness::ThicknessMetrics thicknessMetrics;
         spraythickness::ThicknessPredictionTiming predictionTiming;
+        std::shared_ptr<const spraythickness::MeshSamplingAssessment> meshSamplingAssessment;
         bool reproductionTimingValid = false;
         bool reproductionFramePending = false;
         bool reproductionConversionApplicable = false;
