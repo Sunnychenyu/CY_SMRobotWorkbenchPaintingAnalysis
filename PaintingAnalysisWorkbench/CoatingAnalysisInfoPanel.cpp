@@ -48,7 +48,7 @@ namespace robot_qt_viewer
         addSection(layout, QStringLiteral("Thermal History"), m_historyReadout, content);
         addSection(layout, QStringLiteral("Thickness"), m_thicknessReadout, content);
         addSection(layout, QStringLiteral("Analysis"), m_analysisReadout, content);
-        m_meshSamplingSection = addSection(layout, QStringLiteral("Mesh sampling"),
+        m_meshSamplingSection = addSection(layout, QStringLiteral("Mesh density"),
             m_meshSamplingReadout, m_meshSamplingContent);
         addSection(layout, QStringLiteral("Computation"), m_computationReadout, content);
         m_validationSection = addSection(
@@ -118,6 +118,10 @@ namespace robot_qt_viewer
         const QString translated = compactColonSpacing(
             coatingAnalysisTranslate(m_languageCode, text));
         if(label->text() != translated) label->setText(translated);
+        const QVariant tooltip = label->property("sourceToolTip");
+        if(tooltip.isValid()) {
+            label->setToolTip(coatingAnalysisTranslate(m_languageCode, tooltip.toString()));
+        }
     }
 
     QToolButton* CoatingAnalysisInfoPanel::addSection(
@@ -474,70 +478,71 @@ namespace robot_qt_viewer
         if(!assessment) return;
         const auto& a = *assessment;
         QStringList lines;
+        QStringList details;
         const char* color = "#9e9e9e";
         if(!a.applicable) {
-            lines << QStringLiteral("Sampling assessment unavailable.")
-                  << QString::fromStdString(a.unavailableReason);
+            lines << QStringLiteral("Mesh density:Unavailable")
+                  << QStringLiteral("Hover over this result for details.");
+            details << QString::fromStdString(a.unavailableReason);
         } else {
             if(a.assessedPointCount == 0) {
-                lines << QStringLiteral("Unable to assess: no front-facing footprint hits.");
+                lines << QStringLiteral("Mesh density:Unable to assess")
+                      << QStringLiteral("No spray footprints hit the front of the workpiece.");
             } else if(a.insufficientPointCount > 0) {
-                color = "#e57373";
-                lines << QStringLiteral("Sampling insufficient");
+                // A few sparse edge footprints must not label the entire model
+                // as insufficient; report the affected part and its proportion.
+                const bool allInsufficient = a.insufficientPointCount == a.assessedPointCount;
+                color = allInsufficient ? "#e57373" : "#d8a52a";
+                lines << (allInsufficient ? QStringLiteral("Mesh density:Insufficient")
+                                         : QStringLiteral("Mesh density:Local refinement needed"));
             } else if(a.recommendedPointCount < a.assessedPointCount) {
                 color = "#d8a52a";
-                lines << QStringLiteral("Minimum sampling met");
+                lines << QStringLiteral("Mesh density:Meets minimum");
             } else {
                 color = "#57b87a";
-                lines << QStringLiteral("Recommended count met");
+                lines << QStringLiteral("Mesh density:Sufficient");
             }
-            lines << QStringLiteral("Core pattern threshold:%1% of peak")
-                         .arg(a.corePatternRatio * 100.0, 0, 'g', 4)
-                  << QStringLiteral("Minimum / recommended vertices:%1 / %2")
-                         .arg(static_cast<qulonglong>(a.minimumVertexCount))
-                         .arg(static_cast<qulonglong>(a.recommendedVertexCount))
-                  << QStringLiteral("Assessed / total points:%1 / %2")
-                         .arg(static_cast<qulonglong>(a.assessedPointCount))
-                         .arg(static_cast<qulonglong>(a.totalPointCount))
-                  << QStringLiteral("Air moves / powder off:%1")
-                         .arg(static_cast<qulonglong>(a.airMovePointCount))
-                  << QStringLiteral("No duration / other process:%1")
-                         .arg(static_cast<qulonglong>(a.ignoredPointCount))
-                  << QStringLiteral("Missed footprints:%1")
-                         .arg(static_cast<qulonglong>(a.missedPointCount))
-                  << QStringLiteral("Back-facing footprints:%1")
-                         .arg(static_cast<qulonglong>(a.backFacingPointCount));
             if(a.assessedPointCount > 0) {
-                lines << QStringLiteral("Insufficient points:%1 (%2%)")
-                             .arg(static_cast<qulonglong>(a.insufficientPointCount))
-                             .arg(100.0 * a.insufficientPointCount / a.assessedPointCount, 0, 'f', 2)
-                      << QStringLiteral("Recommended points:%1 (%2%)")
-                             .arg(static_cast<qulonglong>(a.recommendedPointCount))
-                             .arg(100.0 * a.recommendedPointCount / a.assessedPointCount, 0, 'f', 2)
-                      << QStringLiteral("Time-weighted insufficient / recommended:%1% / %2%")
-                             .arg(100.0 * a.insufficientDurationSeconds / a.assessedDurationSeconds, 0, 'f', 2)
-                             .arg(100.0 * a.recommendedDurationSeconds / a.assessedDurationSeconds, 0, 'f', 2)
-                      << QStringLiteral("Min / mean visible vertices:%1 / %2")
-                             .arg(static_cast<qulonglong>(a.minimumVisibleVertexCount))
-                             .arg(a.averageVisibleVertexCount, 0, 'f', 2)
-                      << QStringLiteral("Worst sample (1-based):%1\nWorst sample time:%2 s")
-                             .arg(static_cast<qulonglong>(a.worstSampleIndex + 1))
-                             .arg(a.worstTimeSeconds, 0, 'f', 6)
-                      << QStringLiteral("Center / directional coverage warnings:%1")
-                             .arg(static_cast<qulonglong>(a.limitedDistributionPointCount))
-                      << QStringLiteral("Center gaps / limited 2-D distribution:%1 / %2")
-                             .arg(static_cast<qulonglong>(a.centerGapPointCount))
-                             .arg(static_cast<qulonglong>(a.directionalGapPointCount));
-                if(a.limitedDistributionPointCount > 0) {
-                    lines << QStringLiteral("Check center gaps, one-sided sampling or workpiece edges.");
+                lines << QStringLiteral("Minimum density met:%1%")
+                             .arg(100.0 * (a.assessedPointCount - a.insufficientPointCount)
+                                 / a.assessedPointCount, 0, 'f', 2)
+                      << QStringLiteral("Recommended density met:%1%")
+                             .arg(100.0 * a.recommendedPointCount / a.assessedPointCount, 0, 'f', 2);
+                if(a.insufficientPointCount > 0) {
+                    lines << QStringLiteral("Suggestion:Refine %1 sparse footprints (minimum %2 vertices).")
+                                 .arg(static_cast<qulonglong>(a.insufficientPointCount))
+                                 .arg(static_cast<qulonglong>(a.minimumVisibleVertexCount));
+                } else if(a.recommendedPointCount < a.assessedPointCount) {
+                    lines << QStringLiteral("Suggestion:Usable; refine sparse areas toward the recommended density.");
+                } else {
+                    lines << QStringLiteral("Suggestion:Keep the current mesh.");
                 }
+                details << QStringLiteral("Worst sample (1-based):%1\nWorst sample time:%2 s")
+                               .arg(static_cast<qulonglong>(a.worstSampleIndex + 1))
+                               .arg(a.worstTimeSeconds, 0, 'f', 6)
+                        << QStringLiteral("Center gaps / limited 2-D distribution:%1 / %2")
+                               .arg(static_cast<qulonglong>(a.centerGapPointCount))
+                               .arg(static_cast<qulonglong>(a.directionalGapPointCount));
             }
-            lines << QStringLiteral("Counts use unique visible front-facing vertices only.")
-                  << QStringLiteral("Empirical sampling indicator; not an accuracy guarantee.");
+            details << QStringLiteral("Minimum / recommended vertices:%1 / %2")
+                           .arg(static_cast<qulonglong>(a.minimumVertexCount))
+                           .arg(static_cast<qulonglong>(a.recommendedVertexCount))
+                    << QStringLiteral("Core pattern threshold:%1% of peak")
+                           .arg(a.corePatternRatio * 100.0, 0, 'g', 4)
+                    << QStringLiteral("Counts use unique visible front-facing vertices only.")
+                    << QStringLiteral("Air moves and missed footprints are excluded from the percentages.")
+                    << QStringLiteral("Empirical sampling indicator; not an accuracy guarantee.");
         }
-        lines << QStringLiteral("Assessment only:%1 ms").arg(a.elapsedMilliseconds, 0, 'f', 1);
+        if(a.gpuIntegrated) {
+            details << QStringLiteral("GPU fused counting; cost included in prediction GPU time.")
+                    << QStringLiteral("Assessment setup:%1 ms").arg(a.preparationMilliseconds, 0, 'f', 1)
+                    << QStringLiteral("Zero-count GPU checks:%1 ms").arg(a.probeMilliseconds, 0, 'f', 1)
+                    << QStringLiteral("Compact record readback:%1 ms").arg(a.readbackMilliseconds, 0, 'f', 1)
+                    << QStringLiteral("CPU summary:%1 ms").arg(a.elapsedMilliseconds, 0, 'f', 1);
+        }
         m_meshSamplingReadout->setStyleSheet(QStringLiteral(
             "font-family: Consolas, monospace; color: %1;").arg(QString::fromLatin1(color)));
+        m_meshSamplingReadout->setProperty("sourceToolTip", details.join(QStringLiteral("\n")));
         setReadout(m_meshSamplingReadout, lines.join(QStringLiteral("\n")));
     }
 }

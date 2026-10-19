@@ -1,7 +1,6 @@
 #include "ThicknessPredictionJobController.h"
 
 #include <SprayThicknessPredictionOpenGL/OpenGLThicknessPredictionBackend.h>
-#include <SprayThicknessPredictionOpenGL/MeshSamplingEvaluator.h>
 
 #include <GLRuntime/GLRuntime.h>
 
@@ -154,30 +153,12 @@ namespace robot_qt_viewer
                 postProgress(0.01, deviceInfo + "\nUsing persistent GPU compute session.");
                 spraythickness::ThicknessPredictionExecution execution;
                 execution.cancelRequested = &m_cancelRequested;
-                const bool assessMesh = task->options.evaluateMeshSampling;
-                execution.progress = [this, deviceInfo, assessMesh](
+                execution.progress = [this, deviceInfo](
                     double progress,
                     const std::string& message) {
-                    postProgress(progress * (assessMesh ? 0.85 : 1.0), deviceInfo + "\n" + message);
+                    postProgress(progress, deviceInfo + "\n" + message);
                 };
                 auto result = backend->predict(*task, execution);
-                if(assessMesh) {
-                    postProgress(0.85, "Preparing mesh sampling assessment...");
-                    execution.progress = [this](double progress, const std::string& message) {
-                        postProgress(0.85 + 0.15 * progress, message);
-                    };
-                    try {
-                        result.meshSamplingAssessment = std::make_shared<const
-                            spraythickness::MeshSamplingAssessment>(
-                                spraythickness::opengl::MeshSamplingEvaluator::evaluate(*task, execution));
-                    } catch(const std::exception& exception) {
-                        if(m_cancelRequested.load()) throw;
-                        // A diagnostic failure must not discard a completed thickness field.
-                        auto assessment = std::make_shared<spraythickness::MeshSamplingAssessment>();
-                        assessment->unavailableReason = std::string("Mesh sampling assessment failed: ") + exception.what();
-                        result.meshSamplingAssessment = std::move(assessment);
-                    }
-                }
                 postFinished(std::move(result));
             } catch(const std::exception& exception) {
                 postFailure(QString::fromLocal8Bit(exception.what()));

@@ -608,6 +608,8 @@ namespace robot_qt_viewer
             &CoatingAnalysisModuleController::handleTrajectorySamplingParametersChanged);
         connect(&m_panel, &CoatingAnalysisPanel::trajectorySamplingApplyRequested,
             this, &CoatingAnalysisModuleController::applyTrajectorySampling);
+        connect(&m_panel, &CoatingAnalysisPanel::meshSamplingAssessmentChanged,
+            this, &CoatingAnalysisModuleController::refreshViewModel);
         connect(&m_panel, &CoatingAnalysisPanel::predictionRequested,
             this, &CoatingAnalysisModuleController::predictThickness);
         connect(&m_panel, &CoatingAnalysisPanel::onlineSprayStartRequested,
@@ -3598,7 +3600,7 @@ namespace robot_qt_viewer
                 m_session.appliedTrajectorySamplingMode;
             task.options.base.timeStep =
                 m_session.appliedTrajectoryTimeStepSeconds;
-            task.options.evaluateMeshSampling = true;
+            task.options.evaluateMeshSampling = m_panel.meshSamplingAssessmentEnabled();
             task.options.enableBvhOcclusion = m_panel.bvhOcclusionEnabled();
             task.options.enableHistoryCorrection = m_panel.historyCorrectionEnabled();
             task.options.periodicLocal.enabled = m_panel.periodicLocalPredictionEnabled();
@@ -7026,7 +7028,7 @@ namespace robot_qt_viewer
         if(m_session.hasResult) {
             infoView.thicknessMetrics = m_session.prediction.metrics;
             infoView.predictionTiming = m_session.prediction.timing;
-            if(m_mode == CoatingAnalysisMode::Prediction) {
+            if(m_mode == CoatingAnalysisMode::Prediction && m_panel.meshSamplingAssessmentEnabled()) {
                 infoView.meshSamplingAssessment = m_session.prediction.meshSamplingAssessment;
             }
             infoView.manualThicknessRange = m_session.manualThicknessRange;

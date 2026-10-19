@@ -114,6 +114,7 @@ namespace robot_qt_viewer
         double timeStepSeconds() const;
         bool bvhOcclusionEnabled() const;
         bool historyCorrectionEnabled() const;
+        bool meshSamplingAssessmentEnabled() const;
         PredictionInputMode predictionInputMode() const;
         bool periodicLocalPredictionEnabled() const;
         bool axisymmetricProfilePredictionEnabled() const;
@@ -177,6 +178,7 @@ namespace robot_qt_viewer
         void spatialGridParametersChanged();
         void depositionDirectionsChanged();
         void trajectorySamplingParametersChanged();
+        void meshSamplingAssessmentChanged();
         void trajectorySamplingApplyRequested();
         void profileRegionSelectionRequested();
         void adaptiveRegionSelectionRequested();
@@ -278,6 +280,7 @@ namespace robot_qt_viewer
         QPushButton* m_applyTrajectorySamplingButton = nullptr;
         QCheckBox* m_bvhCheckBox = nullptr;
         QCheckBox* m_historyCheckBox = nullptr;
+        QCheckBox* m_meshSamplingCheckBox = nullptr;
         QComboBox* m_predictionModeCombo = nullptr;
         QWidget* m_spatialGridOptionsWidget = nullptr;
         QCheckBox* m_overrideSpatialGridCellSizeCheckBox = nullptr;

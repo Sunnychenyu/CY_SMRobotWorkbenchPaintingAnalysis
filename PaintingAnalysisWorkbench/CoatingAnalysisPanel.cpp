@@ -1033,10 +1033,20 @@ namespace robot_qt_viewer
         optionsLayout->setSpacing(3);
         m_bvhCheckBox = new QCheckBox(QStringLiteral("BVH shadow occlusion"), optionsGroup);
         m_historyCheckBox = new QCheckBox(QStringLiteral("Thermal exposure history"), optionsGroup);
+        m_meshSamplingCheckBox = new QCheckBox(QStringLiteral("Mesh density check"), optionsGroup);
+        m_meshSamplingCheckBox->setObjectName(QStringLiteral("meshDensityCheck"));
+        m_meshSamplingCheckBox->setToolTip(QStringLiteral(
+            "Check visible mesh vertices per spray footprint during the next prediction. "
+            "Adds computation; disabled by default."));
         m_bvhCheckBox->setChecked(true);
         m_historyCheckBox->setChecked(true);
+        m_meshSamplingCheckBox->setChecked(false);
         optionsLayout->addWidget(m_bvhCheckBox);
         optionsLayout->addWidget(m_historyCheckBox);
+        optionsLayout->addWidget(m_meshSamplingCheckBox);
+        connect(m_meshSamplingCheckBox, &QCheckBox::toggled, this, [this](bool) {
+            emit meshSamplingAssessmentChanged();
+        });
         rootLayout->addWidget(optionsGroup);
         m_predictionSections.push_back(optionsGroup);
 
@@ -2021,6 +2031,7 @@ namespace robot_qt_viewer
         m_powderFeedDirectionCombo->setEnabled(standardControlsEnabled);
         m_bvhCheckBox->setEnabled(standardControlsEnabled);
         m_historyCheckBox->setEnabled(standardControlsEnabled);
+        m_meshSamplingCheckBox->setEnabled(standardControlsEnabled);
         m_predictionModeCombo->setEnabled(
             viewModel.hasModel && viewModel.hasTrajectory
             && !viewModel.predictionRunning);
@@ -2138,6 +2149,11 @@ namespace robot_qt_viewer
     bool CoatingAnalysisPanel::historyCorrectionEnabled() const
     {
         return m_historyCheckBox->isChecked();
+    }
+
+    bool CoatingAnalysisPanel::meshSamplingAssessmentEnabled() const
+    {
+        return m_meshSamplingCheckBox->isChecked();
     }
 
     bool CoatingAnalysisPanel::periodicLocalPredictionEnabled() const
