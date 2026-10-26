@@ -97,18 +97,10 @@ set_target_properties(${TARGET_NAME} PROPERTIES
 )
 
 if(BuildTests)
-    add_subdirectory(
-        regression/PaintingAnalysisMeshAdapterTest
-        ${PROJECT_BINARY_DIR}/tests/painting_analysis_mesh_adapter)
-    add_subdirectory(
-        regression/ThicknessUniformityAnalysisTest
-        ${PROJECT_BINARY_DIR}/tests/thickness_uniformity_analysis)
-    add_subdirectory(
-        regression/OnlineVirtualMotionTest
-        ${PROJECT_BINARY_DIR}/tests/online_virtual_motion)
-    add_subdirectory(
-        regression/OnlinePredictionStreamingTest
-        ${PROJECT_BINARY_DIR}/tests/online_prediction_streaming)
+    rs2026_add_test_unit(regression/PaintingAnalysisMeshAdapterTest)
+    rs2026_add_test_unit(regression/ThicknessUniformityAnalysisTest)
+    rs2026_add_test_unit(regression/OnlineVirtualMotionTest)
+    rs2026_add_test_unit(regression/OnlinePredictionStreamingTest)
 endif()
 
 if(ExportPacakge${PACKAGE_NAME})
