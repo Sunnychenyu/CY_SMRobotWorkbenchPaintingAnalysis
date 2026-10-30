@@ -52,6 +52,8 @@ namespace robot_qt_viewer
 
     struct CoatingAnalysisSession
     {
+        spraythickness::PaperGaussianParameters depositionParameters;
+        spraythickness::PaperGaussianParameters resultDepositionParameters;
         QString objectId;
         QString modelName;
         QString sourcePath;

@@ -2833,6 +2833,11 @@ namespace robot_qt_viewer
             m_savedTrajectorySourceCombo->currentData().toInt());
     }
 
+    void CoatingAnalysisPanel::setDepositionParameters(const spraythickness::PaperGaussianParameters& p)
+    {
+        if(m_curveWidget)m_curveWidget->setParameters(p);
+    }
+
     void CoatingAnalysisPanel::refreshDepositionCurve()
     {
         if(m_curveWidget != nullptr) {

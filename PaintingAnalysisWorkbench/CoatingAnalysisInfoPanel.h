@@ -3,6 +3,7 @@
 #include "CoatingAnalysisViewModel.h"
 
 #include <QWidget>
+#include <SprayThicknessPrediction/ThicknessPrediction.h>
 
 class QLabel;
 class QToolButton;
@@ -19,6 +20,8 @@ namespace robot_qt_viewer
 
     public:
         explicit CoatingAnalysisInfoPanel(QWidget* parent = nullptr);
+        void setDepositionParameters(const spraythickness::PaperGaussianParameters& parameters);
+        void setPublishedDepositionInfo(const QString& algorithm);
         void applyInfo(const CoatingAnalysisInfoView& view);
         void applyThicknessInfo(const CoatingAnalysisInfoView& view);
         void setLanguageCode(const QString& languageCode);
@@ -53,6 +56,8 @@ namespace robot_qt_viewer
         QLabel* m_computationReadout = nullptr;
         QLabel* m_validationReadout = nullptr;
         QLabel* m_simulationReadout = nullptr;
+        spraythickness::PaperGaussianParameters m_depositionParameters;
+        bool m_hasDepositionParameters=false;
         QString m_languageCode{ QStringLiteral("en") };
     };
 }

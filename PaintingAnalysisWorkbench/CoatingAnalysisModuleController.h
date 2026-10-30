@@ -7,6 +7,7 @@
 #include "OnlinePredictionDiagnostics.h"
 
 #include <QHash>
+#include <QVector>
 #include <QObject>
 #include <QPoint>
 #include <QString>
@@ -85,6 +86,10 @@ namespace robot_qt_viewer
         const spraytrajectory::SprayPathPoint& waypointAt(std::size_t index) const;
         double waypointDurationAt(std::size_t index) const;
 
+        bool beginDepositionDiameterMeasurement(const spraythickness::PaperGaussianParameters& expectedModel);
+        void clearDepositionDiameterMeasurement();
+        void applyDepositionCalibration(const spraythickness::PaperGaussianParameters& parameters,int target);
+
     public slots:
         void handleViewportFrameSwapped();
         void handleOnlineFramePresented(quint64 frameId, bool displayed);
@@ -97,6 +102,7 @@ namespace robot_qt_viewer
         void resetThicknessDisplayRange();
 
     signals:
+        void depositionDiametersMeasured(const QVector<double>& baselinesMm,const QVector<double>& incrementsUm);
         void statusMessageRequested(const QString& message, int timeoutMs);
         void thicknessToolTipRequested(
             const QString& text,
@@ -268,6 +274,12 @@ namespace robot_qt_viewer
         void handleTrajectoryDeleteRequested();
         void handleThicknessClearRequested();
 
+        bool m_measuringDiameters=false;
+        QString m_diameterObjectId;
+        sprayworkpiece::WorkpieceModel m_diameterWorkpiece;
+        std::vector<Eigen::Vector3d> m_diameterBasePoints,m_diameterCoatedPoints;
+        QVector<double> m_diameterBaselinesMm,m_diameterIncrementsUm;
+        bool collectDiameterPoint(const QString& objectId,std::uint32_t triangleIndex,const Eigen::Vector3d& hit);
         CoatingAnalysisPanel& m_panel;
         CoatingAnalysisTreePanel& m_treePanel;
         CoatingAnalysisInfoPanel& m_infoPanel;

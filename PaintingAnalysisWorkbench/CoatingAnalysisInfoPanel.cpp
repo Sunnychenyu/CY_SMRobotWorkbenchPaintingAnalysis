@@ -57,28 +57,7 @@ namespace robot_qt_viewer
             layout, QStringLiteral("Simulation"), m_simulationReadout, m_simulationContent);
         layout->addStretch(1);
 
-        {
-            const spraythickness::PaperGaussianParameters parameters;
-            setReadout(m_depositionReadout,
-                QStringLiteral("Amplitude    : %1 mm\n"
-                               "Rotation     : %2\n"
-                               "Phi offset   : %3\n"
-                               "Psi offset   : %4\n"
-                               "Sigma phi    : %5\n"
-                               "Sigma psi    : %6\n"
-                               "Ref distance : %7 mm\n"
-                               "Ref angle    : %8 deg\n"
-                               "Ref exposure : %9 s")
-                    .arg(parameters.amplitudeMillimeters, 0, 'g', 6)
-                    .arg(angleText(parameters.rotationRadians))
-                    .arg(angleText(parameters.phiOffsetRadians))
-                    .arg(angleText(parameters.psiOffsetRadians))
-                    .arg(angleText(parameters.sigmaPhiRadians))
-                    .arg(angleText(parameters.sigmaPsiRadians))
-                    .arg(parameters.referenceDistanceMeters * 1000.0, 0, 'g', 6)
-                    .arg(parameters.referenceAngleDegrees, 0, 'g', 6)
-                    .arg(parameters.referenceExposureSeconds, 0, 'g', 6));
-        }
+        setDepositionParameters(spraythickness::PaperGaussianParameters{});
         {
             const spraythickness::HeatHistoryParameters parameters;
             setReadout(m_historyReadout,
@@ -95,6 +74,45 @@ namespace robot_qt_viewer
         }
         setLanguageCode(QStringLiteral("en"));
     }
+
+    void CoatingAnalysisInfoPanel::setPublishedDepositionInfo(const QString& algorithm)
+    {
+        m_hasDepositionParameters=false;
+        setReadout(m_depositionReadout,algorithm+QStringLiteral("\n")+(m_languageCode.startsWith(QStringLiteral("zh"))
+            ?QStringLiteral("使用该论文对应的沉积函数及标定参数。")
+            :QStringLiteral("Uses the deposition law and calibration of the selected paper.")));
+    }
+
+    void CoatingAnalysisInfoPanel::setDepositionParameters(const spraythickness::PaperGaussianParameters& parameters)
+    {
+        if(m_hasDepositionParameters && spraythickness::samePaperGaussianParameters(m_depositionParameters,parameters))return;
+        m_depositionParameters=parameters;m_hasDepositionParameters=true;
+        const auto history=parameters.useCalibratedHistory?parameters.calibratedHistory:spraythickness::HeatHistoryParameters{};
+        setReadout(m_historyReadout,QStringLiteral("Correction amp: %1\nHistory scale : %2 s\nRef history   : %3 s\nCooling time  : %4 s\nActivity thr  : %5")
+            .arg(history.correctionAmplitude,0,'g',6).arg(history.historyScaleSeconds,0,'g',6)
+            .arg(history.referenceHistorySeconds,0,'g',6).arg(history.coolingTimeSeconds,0,'g',6)
+            .arg(history.activityThresholdRatio,0,'g',6));
+            setReadout(m_depositionReadout,
+                QStringLiteral("Model        : %10\nAmplitude    : %1 mm\n"
+                               "Rotation     : %2\n"
+                               "Phi offset   : %3\n"
+                               "Psi offset   : %4\n"
+                               "Sigma phi    : %5\n"
+                               "Sigma psi    : %6\n"
+                               "Ref distance : %7 mm\n"
+                               "Ref angle    : %8 deg\n"
+                               "Ref exposure : %9 s")
+                    .arg(parameters.amplitudeMillimeters, 0, 'g', 6)
+                    .arg(angleText(parameters.rotationRadians))
+                    .arg(angleText(parameters.phiOffsetRadians))
+                    .arg(angleText(parameters.psiOffsetRadians))
+                    .arg(angleText(parameters.sigmaPhiRadians))
+                    .arg(angleText(parameters.sigmaPsiRadians))
+                    .arg(parameters.referenceDistanceMeters * 1000.0, 0, 'g', 6)
+                    .arg(parameters.referenceAngleDegrees, 0, 'g', 6)
+                    .arg(parameters.referenceExposureSeconds, 0, 'g', 6)
+                    .arg(parameters.calibrationModelId.empty()?QStringLiteral("Platform default"):QString::fromUtf8(parameters.calibrationModelId.c_str())));
+        }
 
     void CoatingAnalysisInfoPanel::setLanguageCode(const QString& languageCode)
     {

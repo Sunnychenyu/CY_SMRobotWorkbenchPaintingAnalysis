@@ -1573,6 +1573,8 @@ namespace robot_qt_viewer
             }
             applyOverlayAfterReload();
         } else if(event.kind == RobotQtViewerEventKind::ProjectDocumentChanged) {
+            // Calibration extension edits do not mutate geometry or active execution snapshots.
+            if(event.sourceId==QStringLiteral("depositionFitting"))return;
             if(m_onlineActive) {
                 resetOnlinePrediction();
             }
@@ -2318,6 +2320,8 @@ namespace robot_qt_viewer
             }
             try {
                 spraythickness::ThicknessPredictionTask task;
+                task.options.deposition = m_session.depositionParameters;
+                m_session.resultDepositionParameters = task.options.deposition;
                 task.model = spraythickness::ThicknessModelKind::PaperGaussian;
                 task.workpiece.name = virtualSource
                     ? "Virtual online workpiece" : "Online rotating workpiece and fixtures";
@@ -3588,6 +3592,8 @@ namespace robot_qt_viewer
             m_hasCurrentThickness = false;
 
             spraythickness::ThicknessPredictionTask task;
+                task.options.deposition = m_session.depositionParameters;
+                m_session.resultDepositionParameters = task.options.deposition;
             task.model = m_panel.thicknessModel();
             task.workpiece = std::move(mesh.workpiece);
             task.trajectory = m_session.trajectory;
@@ -3984,6 +3990,8 @@ namespace robot_qt_viewer
         std::iota(m_session.binding.sampleIndicesBySubMesh.front().begin(),
             m_session.binding.sampleIndicesBySubMesh.front().end(), std::size_t{ 0 });
         spraythickness::ThicknessPredictionTask task;
+                task.options.deposition = m_session.depositionParameters;
+                m_session.resultDepositionParameters = task.options.deposition;
         task.model = m_panel.thicknessModel();
         task.workpiece = m_simulation.workpiece;
         task.trajectory = m_simulation.trajectory;
@@ -4961,6 +4969,8 @@ namespace robot_qt_viewer
             if(algorithm
                 == spraythickness::ReproductionAlgorithmKind::CurrentMethod) {
                 spraythickness::ThicknessPredictionTask task;
+                task.options.deposition = m_session.depositionParameters;
+                m_session.resultDepositionParameters = task.options.deposition;
                 task.model = m_panel.thicknessModel();
                 task.workpiece = workpiece;
                 task.trajectory = trajectory;
@@ -5424,6 +5434,7 @@ namespace robot_qt_viewer
         }
 
         spraythickness::ThicknessPredictionTask task;
+                task.options.deposition = m_session.depositionParameters;
         task.trajectory = m_session.trajectory;
         task.tool.name = "Legacy spray gun";
         task.tool.sprayDirectionLocal = m_panel.sprayDirectionLocal();
@@ -6790,8 +6801,105 @@ namespace robot_qt_viewer
         }
     }
 
+    void CoatingAnalysisModuleController::clearDepositionDiameterMeasurement() {
+        m_measuringDiameters=false;m_diameterWorkpiece={};m_diameterBasePoints.clear();m_diameterCoatedPoints.clear();
+        m_diameterBaselinesMm.clear();m_diameterIncrementsUm.clear();
+    }
+    bool CoatingAnalysisModuleController::beginDepositionDiameterMeasurement(const spraythickness::PaperGaussianParameters& expectedModel) {
+        if(anyPredictionRunning())return false;
+        // Restore the offline session before reading its thickness result.
+        if(onlineModeActive()) {
+            exitOnline();
+        } else if(simulationActive()) {
+            exitSimulation();
+        } else if(reproductionActive()) {
+            exitReproduction();
+        }
+        clearDepositionDiameterMeasurement();
+        if(!m_session.hasResult || m_session.showRelativeError
+            || !spraythickness::samePaperGaussianParameters(expectedModel,m_session.resultDepositionParameters)) {
+            emit statusMessageRequested(QStringLiteral("Apply this fitted model to offline prediction and calculate its thickness first; use the thickness view, not relative error."),8000);return false;
+        }
+        const auto* object=findObject(m_context.document(),m_session.objectId);if(!object)return false;
+        auto model=m_session.predictionDisplayModel;
+        if(!model){
+            const auto path=simulation_project::AssetResolver::resolveProjectPath(makeResolveContext(m_context.projectSession()),object->sourcePath);
+            std::string error;model=assetcore::AssetManager::instance().tryLoadModel(path.generic_u8string(),float(object->visualScale),&error);
+        }
+        if(!model)return false;
+        auto mesh=PaintingAnalysisMeshAdapter::build(*model,object->name,object->sourcePath,makeTransform(object->transform));
+        if(mesh.workpiece.samples.size()!=m_session.prediction.field.results.size()) {
+            emit statusMessageRequested(QStringLiteral("The displayed mesh does not match the thickness result. Run offline prediction again."),6000);return false;
+        }
+        m_diameterWorkpiece=std::move(mesh.workpiece);m_diameterObjectId=m_session.objectId;m_measuringDiameters=true;
+        setShowThickness(true);
+        if(auto* services=m_context.viewportServices())services->beginRotationSurfacePick();
+        emit statusMessageRequested(QStringLiteral("Section 1/3: select three well-separated points on the SAME circular cross-section."),10000);
+        return true;
+    }
+    bool CoatingAnalysisModuleController::collectDiameterPoint(const QString& objectId,std::uint32_t triangleIndex,const Eigen::Vector3d& hit) {
+        if(!m_measuringDiameters)return false;
+        const auto rearm=[this]{QTimer::singleShot(0,this,[this]{if(m_measuringDiameters)if(auto* services=m_context.viewportServices())services->beginRotationSurfacePick();});};
+        if(anyPredictionRunning() || objectId!=m_diameterObjectId || m_session.objectId!=objectId) {
+            emit statusMessageRequested(QStringLiteral("Select the same workpiece used for the offline result."),5000);rearm();return true;
+        }
+        const auto& mesh=m_diameterWorkpiece;const auto offset=std::size_t(triangleIndex)*3;
+        if(offset+2>=mesh.triangleIndices.size()){rearm();return true;}
+        const auto i=mesh.triangleIndices[offset],j=mesh.triangleIndices[offset+1],k=mesh.triangleIndices[offset+2];
+        const auto& a=mesh.samples[i];const auto& b=mesh.samples[j];const auto& c=mesh.samples[k];
+        const Eigen::Vector3d e0=b.position-a.position,e1=c.position-a.position,v=hit-a.position;
+        const double d00=e0.dot(e0),d01=e0.dot(e1),d11=e1.dot(e1),den=d00*d11-d01*d01;
+        if(den<=1e-30){rearm();return true;}
+        double w1=(d11*v.dot(e0)-d01*v.dot(e1))/den,w2=(d00*v.dot(e1)-d01*v.dot(e0))/den;
+        w1=std::clamp(w1,0.0,1.0);w2=std::clamp(w2,0.0,1.0-w1);const double w0=1-w1-w2;
+        const auto& field=m_session.prediction.field.results;
+        const double thickness=w0*field[i].thickness+w1*field[j].thickness+w2*field[k].thickness;
+        Eigen::Vector3d normal=w0*a.normal+w1*b.normal+w2*c.normal;
+        if(!std::isfinite(thickness) || normal.squaredNorm()<=1e-20){rearm();return true;}
+        normal.normalize();m_diameterBasePoints.push_back(hit);m_diameterCoatedPoints.push_back(hit+normal*thickness);
+        if(m_diameterBasePoints.size()==3){
+            const auto diameter=[](const std::vector<Eigen::Vector3d>& p){
+                const double cross=(p[1]-p[0]).cross(p[2]-p[0]).norm();
+                return cross>1e-15?(p[0]-p[1]).norm()*(p[1]-p[2]).norm()*(p[2]-p[0]).norm()/cross:0.0;
+            };
+            const double base=diameter(m_diameterBasePoints),coated=diameter(m_diameterCoatedPoints);
+            m_diameterBasePoints.clear();m_diameterCoatedPoints.clear();
+            if(base<=0 || coated<=base){
+                emit statusMessageRequested(QStringLiteral("Section is degenerate or has no positive diameter growth. Select this section again."),7000);rearm();return true;
+            }
+            m_diameterBaselinesMm.push_back(base*1000);m_diameterIncrementsUm.push_back((coated-base)*1e6);
+            emit depositionDiametersMeasured(m_diameterBaselinesMm,m_diameterIncrementsUm);
+            if(m_diameterBaselinesMm.size()==3){m_measuringDiameters=false;return true;}
+        }
+        emit statusMessageRequested(QStringLiteral("Section %1/3: point %2/3. Select points on the same circular section.")
+            .arg(m_diameterBaselinesMm.size()+1).arg(m_diameterBasePoints.size()+1),8000);
+        rearm();return true;
+    }
+
+    void CoatingAnalysisModuleController::applyDepositionCalibration(
+        const spraythickness::PaperGaussianParameters& parameters,int target)
+    {
+        const CoatingAnalysisMode modes[]={CoatingAnalysisMode::Prediction,CoatingAnalysisMode::Simulation,
+            CoatingAnalysisMode::Online,CoatingAnalysisMode::Reproduction};
+        if(target<0 || target>=4)return;
+        const auto mode=modes[target];
+        CoatingAnalysisSession* saved[]={&m_predictionSession,&m_simulationSession,&m_onlineSession,&m_reproductionSession};
+        if(m_mode==mode)m_session.depositionParameters=parameters;
+        else saved[target]->depositionParameters=parameters;
+        if(m_mode==mode){
+            refreshViewModel();
+        }
+        emit statusMessageRequested(QStringLiteral("Deposition model selected for the next prediction: %1")
+            .arg(parameters.calibrationModelId.empty()?QStringLiteral("platform default"):QString::fromStdString(parameters.calibrationModelId)),5000);
+    }
+
     void CoatingAnalysisModuleController::refreshViewModel()
     {
+        const bool onlineSnapshot=onlineModeActive() && (m_onlineActive || m_onlineFinishing || (m_onlineResult && !m_onlineResult->empty()));
+        m_panel.setDepositionParameters(onlineSnapshot?m_session.resultDepositionParameters:m_session.depositionParameters);
+        if(reproductionActive() && m_panel.reproductionAlgorithm()!=spraythickness::ReproductionAlgorithmKind::CurrentMethod)
+            m_infoPanel.setPublishedDepositionInfo(QString::fromLatin1(spraythickness::reproductionAlgorithmName(m_panel.reproductionAlgorithm())));
+        else m_infoPanel.setDepositionParameters((onlineSnapshot || m_session.hasResult)?m_session.resultDepositionParameters:m_session.depositionParameters);
         CoatingAnalysisViewModel viewModel;
         const bool onlineHasField = onlineModeActive()
             && (m_onlineResult && !m_onlineResult->empty());
@@ -7286,6 +7394,7 @@ namespace robot_qt_viewer
         double normalY,
         double normalZ)
     {
+        if(collectDiameterPoint(objectId,triangleIndex,Eigen::Vector3d(hitX,hitY,hitZ)))return;
         const auto pickStartedAt = std::chrono::steady_clock::now();
         (void)hitX;
         (void)hitY;

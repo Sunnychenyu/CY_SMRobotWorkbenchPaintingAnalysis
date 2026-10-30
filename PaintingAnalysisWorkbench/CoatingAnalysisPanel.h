@@ -76,6 +76,7 @@ namespace robot_qt_viewer
         Q_OBJECT
 
     public:
+        void setDepositionParameters(const spraythickness::PaperGaussianParameters& parameters);
         explicit CoatingAnalysisPanel(QWidget* parent = nullptr);
         void applyViewModel(const CoatingAnalysisViewModel& viewModel);
         void setLanguageCode(const QString& languageCode);

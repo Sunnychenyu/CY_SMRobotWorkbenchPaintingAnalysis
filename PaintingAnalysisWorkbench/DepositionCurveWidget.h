@@ -1,6 +1,7 @@
 #pragma once
 
 #include <SprayCore/SprayModel.h>
+#include <SprayThicknessPrediction/ThicknessPrediction.h>
 
 #include <QWidget>
 
@@ -19,6 +20,7 @@ namespace robot_qt_viewer
         // Plots the Paper Gaussian lateral cross-section derived from its angular
         // sigma at the reference distance.
         void showPaperGaussian();
+        void setParameters(const spraythickness::PaperGaussianParameters& parameters);
 
         // Plots a generic SprayPattern (Uniform / Linear / Gaussian).
         void showSprayPattern(const spraycore::SprayPattern& pattern);
@@ -32,6 +34,7 @@ namespace robot_qt_viewer
     private:
         double evaluate(double lateralMeters) const;
 
+        spraythickness::PaperGaussianParameters m_parameters;
         bool m_usePaperGaussian = true;
         spraycore::SprayPattern m_pattern;
         double m_halfWidth = 0.01; // meters, symmetric plot extent
