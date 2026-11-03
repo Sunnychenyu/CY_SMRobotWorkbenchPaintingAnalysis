@@ -771,6 +771,14 @@ namespace robot_qt_viewer
                 refreshViewModel();
                 publishStateChanged();
             });
+        connect(&m_panel, &CoatingAnalysisPanel::depositionModelSelected,
+            this, [this](const QString& modelId) {
+                if(anyPredictionRunning() || m_onlineActive || m_onlineFinishing) {refreshViewModel();return;}
+                const int target=m_mode==CoatingAnalysisMode::Prediction?0
+                    :m_mode==CoatingAnalysisMode::Simulation?1
+                    :m_mode==CoatingAnalysisMode::Online?2:3;
+                emit depositionModelSelectionRequested(modelId,target);
+            });
         connect(&m_panel, &CoatingAnalysisPanel::depositionDirectionsChanged,
             this, [this]() {
                 if(anyPredictionRunning()) {
@@ -6876,6 +6884,11 @@ namespace robot_qt_viewer
         rearm();return true;
     }
 
+    void CoatingAnalysisModuleController::setDepositionModels(const QMap<QString,QString>& models)
+    {
+        m_panel.setDepositionModels(models);
+    }
+
     void CoatingAnalysisModuleController::applyDepositionCalibration(
         const spraythickness::PaperGaussianParameters& parameters,int target)
     {
@@ -6896,7 +6909,7 @@ namespace robot_qt_viewer
     void CoatingAnalysisModuleController::refreshViewModel()
     {
         const bool onlineSnapshot=onlineModeActive() && (m_onlineActive || m_onlineFinishing || (m_onlineResult && !m_onlineResult->empty()));
-        m_panel.setDepositionParameters(onlineSnapshot?m_session.resultDepositionParameters:m_session.depositionParameters);
+        m_panel.setDepositionParameters(m_session.depositionParameters);
         if(reproductionActive() && m_panel.reproductionAlgorithm()!=spraythickness::ReproductionAlgorithmKind::CurrentMethod)
             m_infoPanel.setPublishedDepositionInfo(QString::fromLatin1(spraythickness::reproductionAlgorithmName(m_panel.reproductionAlgorithm())));
         else m_infoPanel.setDepositionParameters((onlineSnapshot || m_session.hasResult)?m_session.resultDepositionParameters:m_session.depositionParameters);

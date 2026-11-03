@@ -924,6 +924,7 @@ namespace robot_qt_viewer
         algorithmLayout->setContentsMargins(8, 6, 8, 6);
         algorithmLayout->setSpacing(4);
         m_algorithmCombo = new QComboBox(algorithmGroup);
+        m_algorithmCombo->setObjectName(QStringLiteral("depositionModelCombo"));
         m_algorithmCombo->addItem(
             QStringLiteral("Paper Gaussian (GPU)"),
             static_cast<int>(spraythickness::ThicknessModelKind::PaperGaussian));
@@ -945,10 +946,6 @@ namespace robot_qt_viewer
         algorithmLayout->addWidget(m_curveWidget);
         rootLayout->addWidget(algorithmGroup);
         m_predictionSections.push_back(algorithmGroup);
-        connect(m_algorithmCombo,
-            QOverload<int>::of(&QComboBox::currentIndexChanged),
-            this,
-            &CoatingAnalysisPanel::refreshDepositionCurve);
         connect(m_sprayDirectionCombo,
             QOverload<int>::of(&QComboBox::currentIndexChanged),
             this,
@@ -1055,6 +1052,7 @@ namespace robot_qt_viewer
         onlineLayout->setContentsMargins(8, 6, 8, 6);
         onlineLayout->setSpacing(4);
         m_onlineAlgorithmCombo = new QComboBox(onlineGroup);
+        m_onlineAlgorithmCombo->setObjectName(QStringLiteral("onlineDepositionModelCombo"));
         m_onlineAlgorithmCombo->addItem(QStringLiteral("Paper Gaussian (GPU)"),
             static_cast<int>(spraythickness::ThicknessModelKind::PaperGaussian));
         m_onlinePoseSourceCombo = new QComboBox(onlineGroup);
@@ -1638,6 +1636,17 @@ namespace robot_qt_viewer
         }
         setModeTab(0);
 
+        for(auto* combo : {m_algorithmCombo,m_onlineAlgorithmCombo}) {
+            combo->setView(new QListView(combo));
+            combo->setMaxVisibleItems(12);
+            combo->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+            combo->setMinimumContentsLength(14);
+            // Activated also reloads the selected entry after its library model is updated.
+            connect(combo,QOverload<int>::of(&QComboBox::activated),this,[this,combo](int index) {
+                emit depositionModelSelected(combo->itemData(index,Qt::UserRole+1).toString());
+            });
+        }
+        setDepositionModels({});
         refreshDepositionCurve();
         setLanguageCode(QStringLiteral("en"));
         updateReproductionInputUi();
@@ -1652,6 +1661,7 @@ namespace robot_qt_viewer
             return coatingAnalysisTranslate(m_languageCode, value);
         };
         m_onlineFpsLimitSpinBox->setSpecialValueText(translate(QStringLiteral("Unlimited")));
+        setDepositionModels(m_depositionModels);
         for(QWidget* widget : findChildren<QWidget*>()) {
             if(auto* group = qobject_cast<QGroupBox*>(widget)) {
                 group->setTitle(translate(group->title()));
@@ -1662,6 +1672,7 @@ namespace robot_qt_viewer
                 label->setText(translate(label->text()));
                 label->setToolTip(translate(label->toolTip()));
             } else if(auto* combo = qobject_cast<QComboBox*>(widget)) {
+                if(combo==m_algorithmCombo || combo==m_onlineAlgorithmCombo)continue;
                 for(int index = 0; index < combo->count(); ++index) {
                     combo->setItemText(index, translate(combo->itemText(index)));
                     combo->setItemData(index,
@@ -1842,7 +1853,7 @@ namespace robot_qt_viewer
             }
         }
         for(QWidget* section : m_predictionSections) {
-            if(section != nullptr) {
+            if(section != nullptr && section!=m_algorithmCombo->parentWidget()) {
                 section->setVisible(m_mode == CoatingAnalysisMode::Prediction);
             }
         }
@@ -1893,7 +1904,7 @@ namespace robot_qt_viewer
                 section->setVisible(m_mode == CoatingAnalysisMode::Online);
             }
             for(QWidget* section : m_predictionSections) {
-                if(section != nullptr) {
+                if(section != nullptr && section!=m_algorithmCombo->parentWidget()) {
                     // Set final visibility once. Showing a hidden local group on
                     // every progress update temporarily reserves its height and
                     // compresses the running status before the next layout pass.
@@ -2015,7 +2026,8 @@ namespace robot_qt_viewer
             && viewModel.hasTrajectory
             && viewModel.trajectorySamplingApplyRequired);
         updateTrajectorySamplingUi();
-        m_algorithmCombo->setEnabled(standardControlsEnabled);
+        m_algorithmCombo->setEnabled(!viewModel.predictionRunning
+            && !viewModel.reproductionRunning && !viewModel.simulationRunning);
         m_onlineAlgorithmCombo->setEnabled(!m_onlineActive && !viewModel.predictionRunning);
         const bool onlineDirectionsEnabled = !viewModel.predictionRunning && !viewModel.reproductionRunning;
         m_onlineSprayDirectionCombo->setEnabled(onlineDirectionsEnabled);
@@ -2457,6 +2469,12 @@ namespace robot_qt_viewer
 
     void CoatingAnalysisPanel::updateReproductionInputUi()
     {
+        if(m_algorithmCombo) {
+            m_algorithmCombo->parentWidget()->setVisible(m_mode==CoatingAnalysisMode::Prediction
+                || m_mode==CoatingAnalysisMode::Simulation
+                || (m_mode==CoatingAnalysisMode::Reproduction
+                    && reproductionAlgorithm()==spraythickness::ReproductionAlgorithmKind::CurrentMethod));
+        }
         if(m_reproductionAlgorithmCombo == nullptr) {
             return;
         }
@@ -2836,6 +2854,42 @@ namespace robot_qt_viewer
     void CoatingAnalysisPanel::setDepositionParameters(const spraythickness::PaperGaussianParameters& p)
     {
         if(m_curveWidget)m_curveWidget->setParameters(p);
+        const QString id=QString::fromStdString(p.calibrationModelId);
+        if(id!=m_depositionModelId) {
+            m_depositionModelId=id;
+            setDepositionModels(m_depositionModels);
+        } else {
+            // Rejected user selections must return to the controller's actual snapshot.
+            for(auto* combo : {m_algorithmCombo,m_onlineAlgorithmCombo}) {
+                const QSignalBlocker blocker(combo);
+                combo->setCurrentIndex(combo->findData(id,Qt::UserRole+1));
+                combo->setToolTip(combo->currentText());
+            }
+        }
+    }
+
+    void CoatingAnalysisPanel::setDepositionModels(const QMap<QString,QString>& models)
+    {
+        m_depositionModels=models;
+        for(auto* combo : {m_algorithmCombo,m_onlineAlgorithmCombo}) {
+            const QSignalBlocker blocker(combo);
+            combo->clear();
+            const auto add=[combo](const QString& id,const QString& name) {
+                combo->addItem(name,static_cast<int>(spraythickness::ThicknessModelKind::PaperGaussian));
+                combo->setItemData(combo->count()-1,id,Qt::UserRole+1);
+                combo->setItemData(combo->count()-1,name,Qt::ToolTipRole);
+            };
+            add(QString(),coatingAnalysisTranslate(m_languageCode,QStringLiteral("Paper Gaussian (GPU)")));
+            for(auto it=models.cbegin();it!=models.cend();++it)add(it.key(),it.value());
+            if(!m_depositionModelId.isEmpty() && !models.contains(m_depositionModelId))
+                add(m_depositionModelId,m_depositionModelId);
+            combo->setCurrentIndex(combo->findData(m_depositionModelId,Qt::UserRole+1));
+            combo->setToolTip(combo->currentText());
+            int popupWidth=0;
+            for(int i=0;i<combo->count();++i)
+                popupWidth=std::max(popupWidth,combo->fontMetrics().horizontalAdvance(combo->itemText(i))+48);
+            combo->view()->setMinimumWidth(popupWidth);
+        }
     }
 
     void CoatingAnalysisPanel::refreshDepositionCurve()

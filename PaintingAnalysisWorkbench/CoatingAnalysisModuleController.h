@@ -7,6 +7,7 @@
 #include "OnlinePredictionDiagnostics.h"
 
 #include <QHash>
+#include <QMap>
 #include <QVector>
 #include <QObject>
 #include <QPoint>
@@ -89,6 +90,7 @@ namespace robot_qt_viewer
         bool beginDepositionDiameterMeasurement(const spraythickness::PaperGaussianParameters& expectedModel);
         void clearDepositionDiameterMeasurement();
         void applyDepositionCalibration(const spraythickness::PaperGaussianParameters& parameters,int target);
+        void setDepositionModels(const QMap<QString,QString>& models);
 
     public slots:
         void handleViewportFrameSwapped();
@@ -102,6 +104,7 @@ namespace robot_qt_viewer
         void resetThicknessDisplayRange();
 
     signals:
+        void depositionModelSelectionRequested(const QString& modelId,int target);
         void depositionDiametersMeasured(const QVector<double>& baselinesMm,const QVector<double>& incrementsUm);
         void statusMessageRequested(const QString& message, int timeoutMs);
         void thicknessToolTipRequested(

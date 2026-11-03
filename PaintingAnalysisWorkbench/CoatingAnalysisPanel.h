@@ -6,6 +6,7 @@
 #include <SprayThicknessPrediction/ThicknessPrediction.h>
 
 #include <QHash>
+#include <QMap>
 #include <QWidget>
 #include <QVector>
 
@@ -77,6 +78,7 @@ namespace robot_qt_viewer
 
     public:
         void setDepositionParameters(const spraythickness::PaperGaussianParameters& parameters);
+        void setDepositionModels(const QMap<QString,QString>& models);
         explicit CoatingAnalysisPanel(QWidget* parent = nullptr);
         void applyViewModel(const CoatingAnalysisViewModel& viewModel);
         void setLanguageCode(const QString& languageCode);
@@ -178,6 +180,7 @@ namespace robot_qt_viewer
         void axisymmetricProfileSampleCountChanged();
         void spatialGridParametersChanged();
         void depositionDirectionsChanged();
+        void depositionModelSelected(const QString& modelId);
         void trajectorySamplingParametersChanged();
         void meshSamplingAssessmentChanged();
         void trajectorySamplingApplyRequested();
@@ -226,6 +229,8 @@ namespace robot_qt_viewer
         bool reproductionForcesOriginalTrajectoryPoints() const;
 
         QComboBox* m_workpieceCombo = nullptr;
+        QMap<QString,QString> m_depositionModels;
+        QString m_depositionModelId;
         QComboBox* m_algorithmCombo = nullptr;
         QComboBox* m_onlineAlgorithmCombo = nullptr;
         QComboBox* m_onlinePoseSourceCombo = nullptr;
