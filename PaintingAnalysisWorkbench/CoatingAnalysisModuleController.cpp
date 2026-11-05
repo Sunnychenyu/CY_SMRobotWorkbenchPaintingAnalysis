@@ -1,4 +1,5 @@
 #include "CoatingAnalysisModuleController.h"
+#include "DynamicSurfaceDisplayAdapter.h"
 
 #include "CoatingAnalysisInfoPanel.h"
 #include "CoatingAnalysisPanel.h"
@@ -935,6 +936,26 @@ namespace robot_qt_viewer
         connect(&m_treePanel, &CoatingAnalysisTreePanel::thicknessClearRequested,
             this, &CoatingAnalysisModuleController::handleThicknessClearRequested);
 
+        auto* dynamicPanel=m_panel.dynamicSurfacePanel();
+        connect(dynamicPanel,&DynamicSurfacePanel::displayChanged,this,[this] {
+            m_session.dynamicDisplay=m_panel.dynamicSurfacePanel()->display();
+            QString error;
+            if(m_session.dynamicPreview && !applyDynamicSurfaceView(&error)) {
+                m_status=error;emit statusMessageRequested(error,5000);
+            }
+            if(m_dynamicHeader)m_dynamicHeader->setSummary(m_session.modelName,m_session.dynamicDisplay.view);
+            refreshViewModel();
+        });
+        connect(dynamicPanel,&DynamicSurfacePanel::saveRequested,this,[this]{saveDynamicSurfaceResult(false);});
+        connect(dynamicPanel,&DynamicSurfacePanel::exportRequested,this,[this]{saveDynamicSurfaceResult(true);});
+        connect(m_predictionJob.get(),&ThicknessPredictionJobController::surfacePreviewReady,this,
+            [this](std::shared_ptr<const spraythickness::DynamicSurfaceSnapshot> snapshot) {
+                if(m_predictionObjectId.isEmpty() || m_predictionObjectId != m_session.objectId || !snapshot) return;
+                m_session.dynamicPreview=std::move(snapshot);
+                m_session.dynamicDisplay=m_panel.dynamicSurfacePanel()->display();
+                if(m_active) { QString error; if(!applyDynamicSurfaceView(&error)) { m_predictionJob->cancel();m_status=error; } }
+                refreshViewModel();
+            });
         connect(&m_visibilityBar, &CoatingAnalysisVisibilityBar::showModelChanged,
             this, &CoatingAnalysisModuleController::setShowModel);
         connect(&m_visibilityBar, &CoatingAnalysisVisibilityBar::showTrajectoryChanged,
@@ -1459,6 +1480,9 @@ namespace robot_qt_viewer
             exitReproduction();
         }
         m_active = false;
+        if(m_session.dynamicPreview && !m_session.hasResult) {
+            if(auto* services=m_context.viewportServices()) services->clearSurfaceScalarOverlay(m_session.objectId);
+        }
         m_hasCurrentThickness = false;
         emit thicknessToolTipRequested(QString(), QPoint(), false);
         clearModelVisibilityOverrides();
@@ -3552,6 +3576,7 @@ namespace robot_qt_viewer
             }
             m_session.clearResult();
             m_session.binding = std::move(mesh.binding);
+            m_session.dynamicWorldFromModel = worldFromModel;
             m_session.predictionDisplayModel = std::move(mesh.displayModel);
             if(m_panel.adaptiveMeshPredictionEnabled()) {
                 QString displayError;
@@ -3617,6 +3642,7 @@ namespace robot_qt_viewer
             task.options.evaluateMeshSampling = m_panel.meshSamplingAssessmentEnabled();
             task.options.enableBvhOcclusion = m_panel.bvhOcclusionEnabled();
             task.options.enableHistoryCorrection = m_panel.historyCorrectionEnabled();
+            task.options.dynamicSurface = m_panel.dynamicSurfacePanel()->options();
             task.options.periodicLocal.enabled = m_panel.periodicLocalPredictionEnabled();
             task.options.axisymmetricProfile.enabled =
                 m_panel.axisymmetricProfilePredictionEnabled();
@@ -3693,6 +3719,9 @@ namespace robot_qt_viewer
 
             m_predictionStartedAt = std::chrono::steady_clock::now();
             m_predictionTimerActive = true;
+            m_session.dynamicResultOptions = task.options;
+            m_session.dynamicResultTool = task.tool;
+            m_session.dynamicResultProcess = task.process;
             if(!m_predictionJob->start(std::move(task))) {
                 m_predictionObjectId.clear();
                 m_predictionProgress = 0.0;
@@ -4016,6 +4045,8 @@ namespace robot_qt_viewer
             spraythickness::TrajectorySamplingMode::OriginalPoints;
         task.options.enableBvhOcclusion = m_panel.bvhOcclusionEnabled();
         task.options.enableHistoryCorrection = m_panel.historyCorrectionEnabled();
+        task.options.dynamicSurface = m_panel.dynamicSurfacePanel()->options();
+        m_session.dynamicWorldFromModel.setIdentity();
         m_predictionObjectId = m_session.objectId;
         m_predictionProgress = 0.0;
         m_status = QStringLiteral(
@@ -4030,6 +4061,9 @@ namespace robot_qt_viewer
         refreshViewModel();
         publishStateChanged();
         QString startError;
+        m_session.dynamicResultOptions = task.options;
+        m_session.dynamicResultTool = task.tool;
+        m_session.dynamicResultProcess = task.process;
         if(!m_predictionJob->start(std::move(task), &startError)) {
             m_predictionObjectId.clear();
             m_predictionTimerActive = false;
@@ -5781,6 +5815,7 @@ namespace robot_qt_viewer
         m_predictionProgress = m_reproductionRunActive ? 0.95 : 0.0;
 
         if(prediction.field.empty()) {
+            if(auto* viewport=m_context.viewportServices()) viewport->clearSurfaceScalarOverlay(objectId);
             m_reproductionRunActive = false;
             m_reproductionGpuRun = false;
             m_session.clearResult();
@@ -5831,11 +5866,17 @@ namespace robot_qt_viewer
                 QStringLiteral("Uploading the computed thickness field."));
         }
         try {
-            smrobot::visualization::SurfaceScalarOverlay overlay =
-                PaintingAnalysisMeshAdapter::makeOverlay(
-                    objectId.toStdString(),
-                    m_session.binding,
-                    prediction);
+            DynamicSurfaceView dynamicView;
+            if(prediction.dynamicSurface) {
+                m_session.dynamicPreview=prediction.dynamicSurface;
+                m_session.dynamicDisplay=m_panel.dynamicSurfacePanel()->display();
+                dynamicView=makeDynamicSurfaceView(objectId,*prediction.dynamicSurface,m_session.dynamicWorldFromModel,m_session.dynamicDisplay);
+                m_session.predictionDisplayModel=dynamicView.model;
+                m_session.binding=dynamicView.binding;
+            }
+            smrobot::visualization::SurfaceScalarOverlay overlay = prediction.dynamicSurface
+                ? dynamicView.overlay : PaintingAnalysisMeshAdapter::makeOverlay(
+                    objectId.toStdString(), m_session.binding, prediction);
             if(m_reproductionRunActive) {
                 std::size_t overlayVertices = 0;
                 std::size_t overlayNonzero = 0;
@@ -5893,6 +5934,10 @@ namespace robot_qt_viewer
             m_session.hasResult = true;
             m_session.showThickness = true;
             updateThicknessRangeAndStatistics();
+            if(prediction.dynamicSurface) {
+                QString dynamicError;
+                if(!applyDynamicSurfaceView(&dynamicError)) throw std::runtime_error(dynamicError.toStdString());
+            }
             if(reproductionGpu) {
                 m_session.reproduction = spraythickness::AlgorithmReproductionResult();
                 m_session.reproduction.algorithm =
@@ -6723,6 +6768,53 @@ namespace robot_qt_viewer
             m_session.showSprayPoints);
     }
 
+    void CoatingAnalysisModuleController::attachDynamicSurfaceHeader(QWidget* viewport)
+    {
+        if(m_dynamicHeader || !viewport) return;
+        m_dynamicHeader=new DynamicSurfaceHeader(viewport);
+        connect(m_dynamicHeader,&DynamicSurfaceHeader::viewChanged,m_panel.dynamicSurfacePanel(),&DynamicSurfacePanel::setView);
+    }
+
+    bool CoatingAnalysisModuleController::applyDynamicSurfaceView(QString* error)
+    {
+        auto* services=m_context.viewportServices();
+        if(!services || !m_session.dynamicPreview) return false;
+        try {
+            auto view=makeDynamicSurfaceView(m_session.objectId,*m_session.dynamicPreview,
+                m_session.dynamicWorldFromModel,m_session.dynamicDisplay);
+            if(m_session.manualThicknessRange && m_session.dynamicDisplay.coloring==0) {
+                view.overlay.range.minimum=m_session.minimumDisplayThicknessMeters;
+                view.overlay.range.maximum=m_session.maximumDisplayThicknessMeters;
+            }
+            if(!services->applySurfaceScalarOverlayModel(view.overlay,*view.model,error,false)) return false;
+            const auto& d=m_session.dynamicDisplay;
+            services->setSurfaceScalarStyle(m_session.objectId,d.primitive,static_cast<float>(d.opacity),
+                static_cast<float>(d.lineWidth),static_cast<float>(d.pointSize),d.view==2?1:-1,static_cast<float>(d.substrateOpacity));
+            m_session.predictionDisplayModel=std::move(view.model);m_session.binding=std::move(view.binding);
+            m_session.overlay=std::move(view.overlay);
+            services->setCoatingModelVisible(m_session.objectId,true);
+            services->setSurfaceScalarOverlayVisible(m_session.objectId,true);
+            return true;
+        } catch(const std::exception& e) { if(error)*error=QString::fromUtf8(e.what());return false; }
+    }
+
+    void CoatingAnalysisModuleController::saveDynamicSurfaceResult(bool ply)
+    {
+        if(anyPredictionRunning() || !m_session.prediction.dynamicSurface) return;
+        QSettings settings;
+        const QString folder=settings.value(QStringLiteral("coating/dynamic/exportDirectory")).toString();
+        const QString filename=m_session.modelName+(ply?QStringLiteral("_evolved.ply"):QStringLiteral("_evolved.dsurf"));
+        const QString path=QFileDialog::getSaveFileName(&m_panel,ply?QStringLiteral("导出演化表面"):QStringLiteral("保存动态沉积结果"),
+            QDir(folder).filePath(filename),ply?QStringLiteral("PLY 网格 (*.ply)"):QStringLiteral("动态沉积结果 (*.dsurf)"));
+        if(path.isEmpty())return;
+        QString error;
+        try {
+            if(!saveDynamicSurface(path,m_session,ply,&error)) {m_status=error;}
+            else {settings.setValue(QStringLiteral("coating/dynamic/exportDirectory"),QFileInfo(path).absolutePath());m_status=QStringLiteral("已保存：%1").arg(path);}
+        } catch(const std::exception& e) {m_status=QString::fromUtf8(e.what());}
+        emit statusMessageRequested(m_status,5000);
+    }
+
     void CoatingAnalysisModuleController::applyOverlayAfterReload()
     {
         const QString objectId = activeCoatingObjectId();
@@ -6761,6 +6853,7 @@ namespace robot_qt_viewer
             return false;
         }
 
+        if(m_session.prediction.dynamicSurface) return applyDynamicSurfaceView(errorMessage);
         const bool blackOutsideRange = !m_session.showRelativeError;
         if(m_session.predictionDisplayModel) {
             return services->applySurfaceScalarOverlayModel(
@@ -6908,6 +7001,15 @@ namespace robot_qt_viewer
 
     void CoatingAnalysisModuleController::refreshViewModel()
     {
+        auto* dynamicPanel=m_panel.dynamicSurfacePanel();
+        if(m_session.dynamicPreview) dynamicPanel->setDisplay(m_session.dynamicDisplay);
+        dynamicPanel->setResult(m_session.dynamicPreview.get());
+        dynamicPanel->setRunning(anyPredictionRunning());
+        if(m_dynamicHeader) {
+            m_dynamicHeader->setVisible(m_active && m_session.dynamicPreview != nullptr
+                && (m_mode==CoatingAnalysisMode::Prediction || m_mode==CoatingAnalysisMode::Simulation));
+            m_dynamicHeader->setSummary(m_session.modelName,m_session.dynamicDisplay.view);
+        }
         const bool onlineSnapshot=onlineModeActive() && (m_onlineActive || m_onlineFinishing || (m_onlineResult && !m_onlineResult->empty()));
         m_panel.setDepositionParameters(m_session.depositionParameters);
         if(reproductionActive() && m_panel.reproductionAlgorithm()!=spraythickness::ReproductionAlgorithmKind::CurrentMethod)
@@ -7190,13 +7292,18 @@ namespace robot_qt_viewer
             ? m_onlinePickEnabled : m_session.thicknessPickEnabled;
         m_visibilityBar.applyVisibility(visibilityView);
 
+        const bool dynamicLegend = m_session.dynamicPreview != nullptr
+            && (m_mode==CoatingAnalysisMode::Prediction || m_mode==CoatingAnalysisMode::Simulation);
+        emit surfaceQuantityChanged(dynamicLegend && m_session.dynamicDisplay.coloring==1
+            ? QStringLiteral("位移\n(μm)") : QString());
         emit thicknessLegendChanged(
-            m_active && (onlineHasField || viewModel.hasResult),
-            viewModel.minimumMicrometers,
-            viewModel.maximumMicrometers,
-            onlineHasField ? false : m_session.showRelativeError,
-            !onlineModeActive() && !anyPredictionRunning()
-                && !m_session.showRelativeError);
+            m_active && (dynamicLegend ? (m_session.dynamicDisplay.coloring!=2 && m_session.dynamicDisplay.view!=1)
+                : (onlineHasField || viewModel.hasResult)),
+            dynamicLegend ? m_session.overlay.range.minimum*kMetersToMicrometers : viewModel.minimumMicrometers,
+            dynamicLegend ? m_session.overlay.range.maximum*kMetersToMicrometers : viewModel.maximumMicrometers,
+            dynamicLegend || onlineHasField ? false : m_session.showRelativeError,
+            !onlineModeActive() && !anyPredictionRunning() && !m_session.showRelativeError
+                && (!dynamicLegend || m_session.dynamicDisplay.coloring==0));
     }
 
     void CoatingAnalysisModuleController::publishStateChanged()

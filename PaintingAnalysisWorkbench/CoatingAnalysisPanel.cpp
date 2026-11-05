@@ -1,4 +1,5 @@
 #include "CoatingAnalysisPanel.h"
+#include "DynamicSurfacePanel.h"
 
 #include "DepositionCurveWidget.h"
 #include "CoatingAnalysisLanguage.h"
@@ -246,8 +247,10 @@ namespace robot_qt_viewer
             connect(spin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
                 this, simulationParameterChanged);
         }
-        connect(m_runSimulationButton, &QPushButton::clicked,
-            this, &CoatingAnalysisPanel::simulationPredictionRequested);
+        connect(m_runSimulationButton, &QPushButton::clicked,this,[this] {
+            if(m_runSimulationButton->property("predictionRunning").toBool()) emit cancelPredictionRequested();
+            else emit simulationPredictionRequested();
+        });
         connect(m_exportSimulationButton, &QPushButton::clicked,
             this, &CoatingAnalysisPanel::simulationExportRequested);
         m_runSimulationButton->setEnabled(false);
@@ -1044,6 +1047,8 @@ namespace robot_qt_viewer
         connect(m_meshSamplingCheckBox, &QCheckBox::toggled, this, [this](bool) {
             emit meshSamplingAssessmentChanged();
         });
+        m_dynamicSurface = new DynamicSurfacePanel(optionsGroup);
+        optionsLayout->addWidget(m_dynamicSurface);
         rootLayout->addWidget(optionsGroup);
         m_predictionSections.push_back(optionsGroup);
 
@@ -1634,6 +1639,12 @@ namespace robot_qt_viewer
             form->setRowWrapPolicy(QFormLayout::WrapLongRows);
             form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
         }
+        connect(m_dynamicSurface,&DynamicSurfacePanel::enabledChanged,this,[this](bool enabled) {
+            if(enabled) { m_predictionModeCombo->setCurrentIndex(0); m_meshSamplingCheckBox->setChecked(false); }
+            m_predictionModeCombo->setEnabled(!enabled);
+            m_predictionModeCombo->setToolTip(enabled ? QStringLiteral("动态表面沉积使用完整模型，不使用周期映射、局部筛选或简化网格。") : QString());
+            m_meshSamplingCheckBox->setEnabled(!enabled);
+        });
         setModeTab(0);
 
         for(auto* combo : {m_algorithmCombo,m_onlineAlgorithmCombo}) {
@@ -1854,7 +1865,8 @@ namespace robot_qt_viewer
         }
         for(QWidget* section : m_predictionSections) {
             if(section != nullptr && section!=m_algorithmCombo->parentWidget()) {
-                section->setVisible(m_mode == CoatingAnalysisMode::Prediction);
+                section->setVisible(m_mode == CoatingAnalysisMode::Prediction
+                        || (simulation && section == m_bvhCheckBox->parentWidget()));
             }
         }
         for(QWidget* section : m_onlineSections) {
@@ -1908,7 +1920,8 @@ namespace robot_qt_viewer
                     // Set final visibility once. Showing a hidden local group on
                     // every progress update temporarily reserves its height and
                     // compresses the running status before the next layout pass.
-                    bool visible = m_mode == CoatingAnalysisMode::Prediction;
+                    bool visible = m_mode == CoatingAnalysisMode::Prediction
+                        || (simulationActive && section == m_bvhCheckBox->parentWidget());
                     if(section == m_localConfigGroup) {
                         visible = visible && (viewModel.localMode
                             || viewModel.axisymmetricProfileMode
@@ -1923,7 +1936,10 @@ namespace robot_qt_viewer
             updateReproductionSourceUi();
         }
         const bool simulationLocked = viewModel.predictionRunning || viewModel.simulationRunning;
-        m_runSimulationButton->setEnabled(viewModel.canRunSimulation && !simulationLocked);
+        m_runSimulationButton->setProperty("predictionRunning",viewModel.simulationRunning);
+        m_runSimulationButton->setText(viewModel.simulationRunning ? QStringLiteral("停止仿真")
+            : coatingAnalysisTranslate(m_languageCode,QStringLiteral("Run simulation")));
+        m_runSimulationButton->setEnabled(viewModel.simulationRunning || (viewModel.canRunSimulation && !simulationLocked));
         m_exportSimulationButton->setEnabled(viewModel.canExportSimulation && !simulationLocked);
         for(QDoubleSpinBox* spin : { m_plateSideSpinBox, m_plateCellSpinBox,
             m_simulationDistanceSpinBox, m_trajectoryOverrunSpinBox,
@@ -2041,12 +2057,13 @@ namespace robot_qt_viewer
         m_onlineStopButton->setEnabled(m_onlineSpraying);
         m_sprayDirectionCombo->setEnabled(standardControlsEnabled);
         m_powderFeedDirectionCombo->setEnabled(standardControlsEnabled);
-        m_bvhCheckBox->setEnabled(standardControlsEnabled);
-        m_historyCheckBox->setEnabled(standardControlsEnabled);
-        m_meshSamplingCheckBox->setEnabled(standardControlsEnabled);
+        m_dynamicSurface->setRunning(viewModel.predictionRunning || viewModel.simulationRunning);
+        m_bvhCheckBox->setEnabled((standardControlsEnabled || simulationActive) && !simulationLocked);
+        m_historyCheckBox->setEnabled((standardControlsEnabled || simulationActive) && !simulationLocked);
+        m_meshSamplingCheckBox->setEnabled(standardControlsEnabled && !m_dynamicSurface->enabled());
         m_predictionModeCombo->setEnabled(
             viewModel.hasModel && viewModel.hasTrajectory
-            && !viewModel.predictionRunning);
+            && !viewModel.predictionRunning && !m_dynamicSurface->enabled());
         const bool spatialMode = spatialInfluenceFilteringEnabled();
         const bool adaptiveMode = adaptiveMeshPredictionEnabled();
         const bool localCandidateMode = localCandidateVertexPredictionEnabled();
@@ -2189,6 +2206,7 @@ namespace robot_qt_viewer
 
     PredictionInputMode CoatingAnalysisPanel::predictionInputMode() const
     {
+        if(m_dynamicSurface->enabled()) return PredictionInputMode::CompleteAllSprayPoints;
         return static_cast<PredictionInputMode>(
             m_predictionModeCombo->currentData().toInt());
     }

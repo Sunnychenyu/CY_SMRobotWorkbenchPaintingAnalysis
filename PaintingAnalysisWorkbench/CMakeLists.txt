@@ -4,6 +4,10 @@ set(TARGET_NAME PaintingAnalysisWorkbench)
 set(CMAKE_AUTOMOC ON)
 
 set(SOURCES
+    DynamicSurfacePanel.cpp
+    DynamicSurfacePanel.h
+    DynamicSurfaceDisplayAdapter.cpp
+    DynamicSurfaceDisplayAdapter.h
     AlgorithmReproductionJobController.cpp
     AlgorithmReproductionJobController.h
     CoatingAnalysisLanguage.cpp

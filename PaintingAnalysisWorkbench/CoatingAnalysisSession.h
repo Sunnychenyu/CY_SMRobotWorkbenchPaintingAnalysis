@@ -1,6 +1,7 @@
 #pragma once
 
 #include "PaintingAnalysisMeshAdapter.h"
+#include "DynamicSurfacePanel.h"
 #include "ThicknessUniformityAnalysis.h"
 
 #include <SprayThicknessPrediction/AlgorithmReproduction.h>
@@ -75,6 +76,12 @@ namespace robot_qt_viewer
         PaintingAnalysisMeshBinding binding;
         std::shared_ptr<assetcore::ModelDesc> predictionDisplayModel;
         spraythickness::ThicknessPredictionResult prediction;
+        std::shared_ptr<const spraythickness::DynamicSurfaceSnapshot> dynamicPreview;
+        Eigen::Isometry3d dynamicWorldFromModel = Eigen::Isometry3d::Identity();
+        spraythickness::AdvancedThicknessPredictionOptions dynamicResultOptions;
+        spraycore::SprayTool dynamicResultTool;
+        spraycore::SprayProcess dynamicResultProcess;
+        DynamicSurfaceDisplay dynamicDisplay;
         spraythickness::AlgorithmReproductionResult reproduction;
         smrobot::visualization::SurfaceScalarOverlay overlay;
         smrobot::visualization::SurfaceScalarOverlay thicknessOverlay;
@@ -109,6 +116,7 @@ namespace robot_qt_viewer
         {
             binding.sampleIndicesBySubMesh.clear();
             predictionDisplayModel.reset();
+            dynamicPreview.reset();
             prediction = spraythickness::ThicknessPredictionResult();
             reproduction = spraythickness::AlgorithmReproductionResult();
             overlay = smrobot::visualization::SurfaceScalarOverlay();

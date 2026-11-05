@@ -16,6 +16,7 @@ namespace robot_qt_viewer
         explicit ThicknessLegendWidget(QWidget* parent = nullptr);
         void setRange(double minimumMicrometers, double maximumMicrometers);
         void setRelativeErrorMode(bool enabled);
+        void setQuantityOverride(const QString& quantity);
         void setEditingEnabled(bool enabled);
         void setLanguageCode(const QString& languageCode);
 
@@ -35,6 +36,7 @@ namespace robot_qt_viewer
         double m_minimumMicrometers = 0.0;
         double m_maximumMicrometers = 0.0;
         bool m_relativeErrorMode = false;
+        QString m_quantityOverride;
         bool m_editingEnabled = false;
         QString m_languageCode{ QStringLiteral("en") };
         QPointer<QDialog> m_rangeEditor;

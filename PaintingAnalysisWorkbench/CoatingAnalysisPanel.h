@@ -33,6 +33,7 @@ namespace robot_qt_viewer
     enum class OnlinePoseSource { LiveRws, Virtual };
 
     class DepositionCurveWidget;
+    class DynamicSurfacePanel;
 
     enum class PredictionInputMode
     {
@@ -118,6 +119,7 @@ namespace robot_qt_viewer
         bool bvhOcclusionEnabled() const;
         bool historyCorrectionEnabled() const;
         bool meshSamplingAssessmentEnabled() const;
+        DynamicSurfacePanel* dynamicSurfacePanel() const { return m_dynamicSurface; }
         PredictionInputMode predictionInputMode() const;
         bool periodicLocalPredictionEnabled() const;
         bool axisymmetricProfilePredictionEnabled() const;
@@ -228,6 +230,7 @@ namespace robot_qt_viewer
         void applyReproductionRecommendedSetup();
         bool reproductionForcesOriginalTrajectoryPoints() const;
 
+        DynamicSurfacePanel* m_dynamicSurface = nullptr;
         QComboBox* m_workpieceCombo = nullptr;
         QMap<QString,QString> m_depositionModels;
         QString m_depositionModelId;

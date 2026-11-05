@@ -158,6 +158,7 @@ namespace robot_qt_viewer
                     const std::string& message) {
                     postProgress(progress, deviceInfo + "\n" + message);
                 };
+                execution.surfacePreview = [this](std::shared_ptr<const spraythickness::DynamicSurfaceSnapshot> snapshot) { postPreview(std::move(snapshot)); };
                 auto result = backend->predict(*task, execution);
                 postFinished(std::move(result));
             } catch(const std::exception& exception) {
@@ -174,6 +175,20 @@ namespace robot_qt_viewer
         if(context != nullptr) {
             context->doneCurrent();
         }
+    }
+
+    void ThicknessPredictionJobController::postPreview(std::shared_ptr<const spraythickness::DynamicSurfaceSnapshot> snapshot)
+    {
+        { std::lock_guard<std::mutex> lock(m_previewMutex);
+          m_latestPreview=std::move(snapshot);
+          if(m_previewQueued) return;
+          m_previewQueued=true;
+        }
+        QMetaObject::invokeMethod(this,[this] {
+            std::shared_ptr<const spraythickness::DynamicSurfaceSnapshot> latest;
+            { std::lock_guard<std::mutex> lock(m_previewMutex); latest=std::move(m_latestPreview);m_previewQueued=false; }
+            if(latest && !m_cancelRequested.load()) emit surfacePreviewReady(std::move(latest));
+        },Qt::QueuedConnection);
     }
 
     void ThicknessPredictionJobController::postProgress(

@@ -11,6 +11,7 @@
 #include <QVector>
 #include <QObject>
 #include <QPoint>
+#include <QPointer>
 #include <QString>
 #include <QStringList>
 
@@ -33,6 +34,7 @@ namespace spraytrajectory
 namespace robot_qt_viewer
 {
     class CoatingAnalysisPanel;
+    class DynamicSurfaceHeader;
     class CoatingAnalysisTreePanel;
     class CoatingAnalysisInfoPanel;
     class CoatingAnalysisVisibilityBar;
@@ -59,6 +61,7 @@ namespace robot_qt_viewer
             QObject* parent = nullptr);
         ~CoatingAnalysisModuleController() override;
 
+        void attachDynamicSurfaceHeader(QWidget* viewport);
         void activate();
         void deactivate();
         void setLanguageCode(const QString& languageCode);
@@ -104,6 +107,7 @@ namespace robot_qt_viewer
         void resetThicknessDisplayRange();
 
     signals:
+        void surfaceQuantityChanged(const QString& quantity);
         void depositionModelSelectionRequested(const QString& modelId,int target);
         void depositionDiametersMeasured(const QVector<double>& baselinesMm,const QVector<double>& incrementsUm);
         void statusMessageRequested(const QString& message, int timeoutMs);
@@ -182,6 +186,9 @@ namespace robot_qt_viewer
         void previewLocalInputs();
         void selectAxisymmetricProfileRegion();
         void cancelPrediction();
+        bool applyDynamicSurfaceView(QString* error = nullptr);
+        void saveDynamicSurfaceResult(bool ply);
+        QPointer<DynamicSurfaceHeader> m_dynamicHeader;
         void handlePredictionProgress(double progress, const QString& message);
         void handlePredictionFinished(const spraythickness::ThicknessPredictionResult& prediction);
         void handlePredictionFailed(const QString& message);

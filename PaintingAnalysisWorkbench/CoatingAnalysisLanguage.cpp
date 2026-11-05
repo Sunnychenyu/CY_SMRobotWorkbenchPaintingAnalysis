@@ -19,6 +19,22 @@ namespace robot_qt_viewer
         const QVector<TranslationEntry>& entries()
         {
             static const QVector<TranslationEntry> value = {
+                {"Dynamic surface requires complete-model prediction.", "动态表面沉积需要使用完整模型计算。"},
+                {"Dynamic surface requires indexed triangles.", "动态表面沉积需要三角网格。"},
+                {"Dynamic surface requires finite, valid mesh vertices.", "动态表面网格包含无效顶点，请先修复模型。"},
+                {"Dynamic surface requires a triangle mesh, not isolated points.", "动态表面网格中存在孤立点，请先修复模型。"},
+                {"Dynamic surface contains a degenerate triangle.", "动态表面网格中存在退化三角形。"},
+                {"Dynamic surface contains a zero-area triangle.", "动态表面网格中存在零面积三角形。"},
+                {"Dynamic surface requires a manifold mesh; an edge has more than two faces.", "网格存在超过两个面共享同一边的情况，请先修复模型。"},
+                {"Dynamic surface has inconsistent/non-orientable topology.", "网格面朝向无法统一，请先修复模型。"},
+                {"Dynamic surface cannot determine an outward vertex normal.", "无法确定表面顶点的生长法向，请检查网格。"},
+                {"Dynamic surface input contains intersecting triangles or an unsupported BVH depth.", "原始网格存在相交面，或遮挡树深度超出支持范围。"},
+                {"Dynamic surface cannot advance: mesh contact, inversion, or growth below numeric resolution. Refine the mesh or reduce deposition.", "表面无法继续推进：出现接触、翻转或达到数值精度限制。请加密网格或减少沉积量。"},
+                {"Preparing dynamic surface topology", "正在准备动态表面拓扑"},
+                {"Dynamic surface: ", "动态表面："},
+                {" s; elapsed ", " 秒；耗时 "},
+                {"Dynamic surface requires 13 OpenGL storage buffer bindings.", "当前显卡不支持动态表面计算所需的存储缓冲区数量。"},
+                {"Dynamic surface is available in offline prediction and simulation only.", "动态表面模式仅适用于离线厚度预测和厚度仿真。"},
                 {"Mesh density check", "网格密度检查"},
                 {"Check visible mesh vertices per spray footprint during the next prediction. Adds computation; disabled by default.", "勾选后在下次预测时检查各喷斑内的可见网格顶点；会增加计算开销，默认关闭。"},
                 {"Mesh density", "网格密度"},

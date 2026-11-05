@@ -35,6 +35,12 @@ namespace robot_qt_viewer
         update();
     }
 
+    void ThicknessLegendWidget::setQuantityOverride(const QString& quantity)
+    {
+        if(m_quantityOverride==quantity)return;
+        m_quantityOverride=quantity;update();
+    }
+
     void ThicknessLegendWidget::setRelativeErrorMode(bool enabled)
     {
         if(m_relativeErrorMode == enabled) return;
@@ -189,8 +195,8 @@ namespace robot_qt_viewer
             m_relativeErrorMode
                 ? coatingAnalysisTranslate(
                     m_languageCode, QStringLiteral("Relative error\n(%)"))
-                : coatingAnalysisTranslate(
-                    m_languageCode, QStringLiteral("Thickness\n(\u03bcm)")));
+                : (m_quantityOverride.isEmpty() ? coatingAnalysisTranslate(
+                    m_languageCode, QStringLiteral("Thickness\n(\u03bcm)")) : m_quantityOverride));
 
         const QRect barRect(18, 58, 27, qMax(80, height() - 88));
         const smrobot::visualization::ScalarColorMap colorMap =
