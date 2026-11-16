@@ -2880,7 +2880,9 @@ namespace robot_qt_viewer
             // Rejected user selections must return to the controller's actual snapshot.
             for(auto* combo : {m_algorithmCombo,m_onlineAlgorithmCombo}) {
                 const QSignalBlocker blocker(combo);
-                combo->setCurrentIndex(combo->findData(id,Qt::UserRole+1));
+                const auto selectedId=id.isEmpty() && m_depositionModels.contains(QStringLiteral("paper_gaussian"))
+                    ? QStringLiteral("paper_gaussian"):id;
+                combo->setCurrentIndex(combo->findData(selectedId,Qt::UserRole+1));
                 combo->setToolTip(combo->currentText());
             }
         }
@@ -2897,11 +2899,14 @@ namespace robot_qt_viewer
                 combo->setItemData(combo->count()-1,id,Qt::UserRole+1);
                 combo->setItemData(combo->count()-1,name,Qt::ToolTipRole);
             };
-            add(QString(),coatingAnalysisTranslate(m_languageCode,QStringLiteral("Paper Gaussian (GPU)")));
+            if(!models.contains(QStringLiteral("paper_gaussian")))
+                add(QString(),coatingAnalysisTranslate(m_languageCode,QStringLiteral("Paper Gaussian (GPU)")));
             for(auto it=models.cbegin();it!=models.cend();++it)add(it.key(),it.value());
             if(!m_depositionModelId.isEmpty() && !models.contains(m_depositionModelId))
                 add(m_depositionModelId,m_depositionModelId);
-            combo->setCurrentIndex(combo->findData(m_depositionModelId,Qt::UserRole+1));
+            const auto selectedId=m_depositionModelId.isEmpty() && models.contains(QStringLiteral("paper_gaussian"))
+                ? QStringLiteral("paper_gaussian"):m_depositionModelId;
+            combo->setCurrentIndex(combo->findData(selectedId,Qt::UserRole+1));
             combo->setToolTip(combo->currentText());
             int popupWidth=0;
             for(int i=0;i<combo->count();++i)

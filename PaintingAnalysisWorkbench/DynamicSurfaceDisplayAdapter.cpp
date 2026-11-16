@@ -76,7 +76,7 @@ namespace robot_qt_viewer
                     {"useCalibratedHistory",p.useCalibratedHistory},{"calibratedHistory",history(p.calibratedHistory)},
                     {"useCalibratedEfficiencies",p.useCalibratedEfficiencies},{"efficiencyIncludesGeometry",p.efficiencyIncludesGeometry},
                     {"distanceEfficiency",curve(p.distanceEfficiency)},{"angleEfficiency",curve(p.angleEfficiency)},
-                    {"useCalibratedDensity",p.useCalibratedDensity},{"distanceDensity",curve(p.distanceDensity)},{"angleDensity",curve(p.angleDensity)},
+                    {"densityMultiplier",p.densityMultiplier},{"useCalibratedDensity",p.useCalibratedDensity},{"distanceDensity",curve(p.distanceDensity)},{"angleDensity",curve(p.angleDensity)},
                     {"densityDistanceMinMm",p.densityDistanceMinMm},{"densityDistanceMaxMm",p.densityDistanceMaxMm},
                     {"densityAngleMinDegrees",p.densityAngleMinDegrees},{"densityAngleMaxDegrees",p.densityAngleMaxDegrees}}}};
             metadata["process"]={{"id",session.dynamicResultProcess.id},{"flowRate",session.dynamicResultProcess.flowRate},
