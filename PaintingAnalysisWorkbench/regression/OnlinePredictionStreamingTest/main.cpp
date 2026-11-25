@@ -11,8 +11,10 @@
 #include <QToolButton>
 #include <QThread>
 #include <QComboBox>
+#include <QCheckBox>
 #include <QDoubleSpinBox>
 #include <QPushButton>
+#include <QPixmap>
 
 #include <chrono>
 #include <algorithm>
@@ -23,9 +25,105 @@
 
 namespace
 {
+    bool localCorrectionUiTest()
+    {
+        using namespace robot_qt_viewer;
+        CoatingAnalysisPanel panel;
+        auto* offline = panel.findChild<QCheckBox*>(QStringLiteral("localDepositionCorrection"));
+        auto* online = panel.findChild<QCheckBox*>(QStringLiteral("onlineLocalCorrection"));
+        auto* reproduction = panel.findChild<QCheckBox*>(QStringLiteral("reproductionLocalCorrection"));
+        auto* parameters = panel.findChild<QPushButton*>(QStringLiteral("localCorrectionParameters"));
+        if(!offline || !online || !reproduction || !parameters || !panel.localCorrectionEnabled()
+            || !offline->isChecked() || !online->isChecked() || !reproduction->isChecked()) return false;
+        int edits = 0;
+        QObject::connect(&panel, &CoatingAnalysisPanel::localCorrectionEnabledChanged,
+            [&](bool) { ++edits; });
+        panel.setLocalCorrectionEnabled(false);
+        if(edits != 0 || offline->isChecked() || online->isChecked() || reproduction->isChecked()) return false;
+        online->setChecked(true);
+        if(edits != 1 || !panel.localCorrectionEnabled() || !offline->isChecked() || !reproduction->isChecked()) return false;
+        CoatingAnalysisViewModel view;
+        view.predictionRunning = true;
+        panel.applyViewModel(view);
+        if(offline->isEnabled() || online->isEnabled() || reproduction->isEnabled() || parameters->isEnabled()) return false;
+        view.predictionRunning = false;
+        panel.applyViewModel(view);
+        panel.setOnlinePredictionState(true, false, QStringLiteral("Paused"));
+        if(offline->isEnabled() || online->isEnabled() || parameters->isEnabled()) return false;
+        panel.setOnlinePredictionState(false, false, QString());
+        panel.applyViewModel(view);
+        if(!offline->isEnabled() || !online->isEnabled() || !parameters->isEnabled()) return false;
+        panel.setLanguageCode(QStringLiteral("zh-CN"));
+        const QString screenshotPath = qEnvironmentVariable("RS2026_LOCAL_CORRECTION_SCREENSHOT");
+        if(!screenshotPath.isEmpty()) {
+            panel.setLocalCorrectionStatus(QStringLiteral(
+                "Local correction: region mapping will be checked before prediction."));
+            // Native Windows Qt rendering without opening a user project.
+            panel.setAttribute(Qt::WA_DontShowOnScreen);
+            panel.resize(540, 1100);
+            panel.show();
+            QApplication::processEvents();
+            QWidget* options = offline->parentWidget();
+            if(!options || !options->grab().save(screenshotPath)) return false;
+            panel.hide();
+        }
+        return offline->text() == QStringLiteral("\u9f7f\u9876\u5c40\u90e8\u6c89\u79ef\u4fee\u6b63");
+    }
+
+    bool liveBindingUiTest()
+    {
+        using namespace robot_qt_viewer;
+        CoatingAnalysisPanel panel;
+        CoatingAnalysisViewModel view;
+        view.mode = CoatingAnalysisMode::Online;
+        view.hasModel = true;
+        view.workpieces = {{QStringLiteral("part"), QStringLiteral("Target part")},
+            {QStringLiteral("part2"), QStringLiteral("Another part")}};
+        view.selectedWorkpieceId = QStringLiteral("part");
+        view.onlineTcps = {{QStringLiteral("gun"), QStringLiteral("tcp1"), QStringLiteral("Gun / TCP1")},
+            {QStringLiteral("gun"), QStringLiteral("tcp2"), QStringLiteral("Gun / TCP2")}};
+        panel.applyViewModel(view);
+        auto* tcp = panel.findChild<QComboBox*>(QStringLiteral("onlineConfiguredTcp"));
+        auto* start = panel.findChild<QPushButton*>(QStringLiteral("onlineStartSpraying"));
+        auto* confirm = panel.findChild<QPushButton*>(QStringLiteral("onlineConfirmBinding"));
+        auto* load = panel.findChild<QPushButton*>(QStringLiteral("onlineLoadScene"));
+        if(!tcp || !start || !confirm || !load || start->isEnabled() || !confirm->isEnabled()) return false;
+        int changes = 0, confirmations = 0, loads = 0, targetChanges = 0;
+        QObject::connect(&panel, &CoatingAnalysisPanel::onlineBindingChanged, [&] { ++changes; });
+        QObject::connect(&panel, &CoatingAnalysisPanel::onlineBindingConfirmRequested, [&] { ++confirmations; });
+        QObject::connect(&panel, &CoatingAnalysisPanel::onlineSceneLoadRequested, [&] { ++loads; });
+        QObject::connect(&panel, &CoatingAnalysisPanel::workpieceChanged, [&] { ++targetChanges; });
+        tcp->setCurrentIndex(1);
+        if(changes != 1 || panel.onlineTcpFrameId() != QStringLiteral("tcp2")) return false;
+        panel.applyViewModel(view);
+        if(changes != 1 || panel.onlineTcpFrameId() != QStringLiteral("tcp2")) return false;
+        for(auto* combo : panel.findChildren<QComboBox*>()) {
+            if(combo->findData(QStringLiteral("part2")) >= 0) {
+                if(!combo->isEnabled()) return false;
+                combo->setCurrentIndex(combo->findData(QStringLiteral("part2")));
+            }
+        }
+        if(targetChanges != 1) return false;
+        confirm->click(); load->click();
+        if(confirmations != 1 || loads != 1) return false;
+        view.onlineBindingConfirmed = true;
+        panel.applyViewModel(view);
+        if(!start->isEnabled()) return false;
+        panel.setOnlinePredictionState(true, true, QStringLiteral("Online accumulation active."));
+        if(tcp->isEnabled() || confirm->isEnabled() || start->isEnabled()) return false;
+        panel.setOnlinePredictionState(false, false, QString());
+        view.onlineBindingConfirmed = false;
+        view.onlineTcps.clear();
+        panel.applyViewModel(view);
+        return !start->isEnabled() && !confirm->isEnabled() && panel.onlineTcpFrameId().isEmpty();
+    }
+
     bool uiRefreshTest(bool benchmarkOnly)
     {
         robot_qt_viewer::CoatingAnalysisPanel panel;
+        auto* source = panel.findChild<QComboBox*>(QStringLiteral("onlinePoseSource"));
+        if(!source || panel.onlinePoseSource() != robot_qt_viewer::OnlinePoseSource::LiveRws) return false;
+        source->setCurrentIndex(source->findData(static_cast<int>(robot_qt_viewer::OnlinePoseSource::Virtual)));
         robot_qt_viewer::CoatingAnalysisInfoPanel info;
         robot_qt_viewer::CoatingAnalysisTreeModel tree;
         robot_qt_viewer::CoatingAnalysisViewModel view;
@@ -452,7 +550,7 @@ int main(int argc, char** argv)
     QApplication app(argc, argv);
     if(argc > 1 && std::string(argv[1]) == "--benchmark") return benchmark();
     if(argc > 1 && std::string(argv[1]) == "--ui-benchmark") return uiRefreshTest(true) ? 0 : 1;
-    if(!uiRefreshTest(false)) return 1;
+    if(!localCorrectionUiTest() || !liveBindingUiTest() || !uiRefreshTest(false)) return 1;
     robot_qt_viewer::OnlineThicknessPredictionJobController job;
     std::shared_ptr<const spraythickness::OnlineThicknessSnapshot> final;
     QString error;

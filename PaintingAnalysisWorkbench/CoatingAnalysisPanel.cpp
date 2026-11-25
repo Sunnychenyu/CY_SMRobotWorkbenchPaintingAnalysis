@@ -1,4 +1,5 @@
 #include "CoatingAnalysisPanel.h"
+#include "DynamicSurfacePanel.h"
 
 #include "DepositionCurveWidget.h"
 #include "CoatingAnalysisLanguage.h"
@@ -246,8 +247,10 @@ namespace robot_qt_viewer
             connect(spin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
                 this, simulationParameterChanged);
         }
-        connect(m_runSimulationButton, &QPushButton::clicked,
-            this, &CoatingAnalysisPanel::simulationPredictionRequested);
+        connect(m_runSimulationButton, &QPushButton::clicked,this,[this] {
+            if(m_runSimulationButton->property("predictionRunning").toBool()) emit cancelPredictionRequested();
+            else emit simulationPredictionRequested();
+        });
         connect(m_exportSimulationButton, &QPushButton::clicked,
             this, &CoatingAnalysisPanel::simulationExportRequested);
         m_runSimulationButton->setEnabled(false);
@@ -575,6 +578,23 @@ namespace robot_qt_viewer
         m_reproductionHistoryCheckBox->setChecked(true);
         reproductionForm->addRow(m_reproductionBvhCheckBox);
         reproductionForm->addRow(m_reproductionHistoryCheckBox);
+        m_reproductionLocalCorrectionCheckBox = new QCheckBox(
+            QStringLiteral("Tooth-top local deposition correction"), algorithmPage);
+        m_reproductionLocalCorrectionCheckBox->setObjectName(QStringLiteral("reproductionLocalCorrection"));
+        m_reproductionLocalCorrectionCheckBox->setChecked(true);
+        m_reproductionLocalCorrectionStatusLabel = new QLabel(algorithmPage);
+        m_reproductionLocalCorrectionStatusLabel->setWordWrap(true);
+        reproductionForm->addRow(m_reproductionLocalCorrectionCheckBox);
+        reproductionForm->addRow(m_reproductionLocalCorrectionStatusLabel);
+        m_reproductionLocalCorrectionParametersButton = new QPushButton(
+            QStringLiteral("Local correction parameters..."), algorithmPage);
+        reproductionForm->addRow(m_reproductionLocalCorrectionParametersButton);
+        connect(m_reproductionLocalCorrectionParametersButton, &QPushButton::clicked,
+            this, &CoatingAnalysisPanel::localCorrectionParametersRequested);
+        connect(m_reproductionLocalCorrectionCheckBox, &QCheckBox::toggled, this, [this](bool enabled) {
+            setLocalCorrectionEnabled(enabled);
+            emit localCorrectionEnabledChanged(enabled);
+        });
         m_wuDisplayScaleWidget = new QWidget(algorithmPage);
         auto* wuDisplayScaleLayout = new QHBoxLayout(m_wuDisplayScaleWidget);
         wuDisplayScaleLayout->setContentsMargins(0, 0, 0, 0);
@@ -690,6 +710,9 @@ namespace robot_qt_viewer
                 configurationEnabled);
             m_reproductionBvhCheckBox->setVisible(current);
             m_reproductionHistoryCheckBox->setVisible(current);
+            m_reproductionLocalCorrectionCheckBox->setVisible(current);
+            m_reproductionLocalCorrectionStatusLabel->setVisible(current);
+            m_reproductionLocalCorrectionParametersButton->setVisible(current);
             updateReproductionInputUi();
             emit reproductionInputsChanged();
         };
@@ -924,6 +947,7 @@ namespace robot_qt_viewer
         algorithmLayout->setContentsMargins(8, 6, 8, 6);
         algorithmLayout->setSpacing(4);
         m_algorithmCombo = new QComboBox(algorithmGroup);
+        m_algorithmCombo->setObjectName(QStringLiteral("depositionModelCombo"));
         m_algorithmCombo->addItem(
             QStringLiteral("Paper Gaussian (GPU)"),
             static_cast<int>(spraythickness::ThicknessModelKind::PaperGaussian));
@@ -945,10 +969,6 @@ namespace robot_qt_viewer
         algorithmLayout->addWidget(m_curveWidget);
         rootLayout->addWidget(algorithmGroup);
         m_predictionSections.push_back(algorithmGroup);
-        connect(m_algorithmCombo,
-            QOverload<int>::of(&QComboBox::currentIndexChanged),
-            this,
-            &CoatingAnalysisPanel::refreshDepositionCurve);
         connect(m_sprayDirectionCombo,
             QOverload<int>::of(&QComboBox::currentIndexChanged),
             this,
@@ -1033,10 +1053,43 @@ namespace robot_qt_viewer
         optionsLayout->setSpacing(3);
         m_bvhCheckBox = new QCheckBox(QStringLiteral("BVH shadow occlusion"), optionsGroup);
         m_historyCheckBox = new QCheckBox(QStringLiteral("Thermal exposure history"), optionsGroup);
+        m_meshSamplingCheckBox = new QCheckBox(QStringLiteral("Mesh density check"), optionsGroup);
+        m_meshSamplingCheckBox->setObjectName(QStringLiteral("meshDensityCheck"));
+        m_meshSamplingCheckBox->setToolTip(QStringLiteral(
+            "Check visible mesh vertices per spray footprint during the next prediction. "
+            "Adds computation; disabled by default."));
         m_bvhCheckBox->setChecked(true);
         m_historyCheckBox->setChecked(true);
+        m_meshSamplingCheckBox->setChecked(false);
         optionsLayout->addWidget(m_bvhCheckBox);
         optionsLayout->addWidget(m_historyCheckBox);
+        m_localCorrectionCheckBox = new QCheckBox(
+            QStringLiteral("Tooth-top local deposition correction"), optionsGroup);
+        m_localCorrectionCheckBox->setObjectName(QStringLiteral("localDepositionCorrection"));
+        m_localCorrectionCheckBox->setChecked(true);
+        m_localCorrectionCheckBox->setToolTip(QStringLiteral(
+            "Uses saved tooth-top regions only. Retention decreases from the center toward both edges without recovering to 100%. "
+            "Walls, bottoms and transition regions keep their original deposition."));
+        m_localCorrectionStatusLabel = new QLabel(optionsGroup);
+        m_localCorrectionStatusLabel->setWordWrap(true);
+        optionsLayout->addWidget(m_localCorrectionCheckBox);
+        optionsLayout->addWidget(m_localCorrectionStatusLabel);
+        m_localCorrectionParametersButton = new QPushButton(
+            QStringLiteral("Local correction parameters..."), optionsGroup);
+        m_localCorrectionParametersButton->setObjectName(QStringLiteral("localCorrectionParameters"));
+        optionsLayout->addWidget(m_localCorrectionParametersButton);
+        connect(m_localCorrectionParametersButton, &QPushButton::clicked,
+            this, &CoatingAnalysisPanel::localCorrectionParametersRequested);
+        connect(m_localCorrectionCheckBox, &QCheckBox::toggled, this, [this](bool enabled) {
+            setLocalCorrectionEnabled(enabled);
+            emit localCorrectionEnabledChanged(enabled);
+        });
+        optionsLayout->addWidget(m_meshSamplingCheckBox);
+        connect(m_meshSamplingCheckBox, &QCheckBox::toggled, this, [this](bool) {
+            emit meshSamplingAssessmentChanged();
+        });
+        m_dynamicSurface = new DynamicSurfacePanel(optionsGroup);
+        optionsLayout->addWidget(m_dynamicSurface);
         rootLayout->addWidget(optionsGroup);
         m_predictionSections.push_back(optionsGroup);
 
@@ -1045,13 +1098,77 @@ namespace robot_qt_viewer
         onlineLayout->setContentsMargins(8, 6, 8, 6);
         onlineLayout->setSpacing(4);
         m_onlineAlgorithmCombo = new QComboBox(onlineGroup);
+        m_onlineAlgorithmCombo->setObjectName(QStringLiteral("onlineDepositionModelCombo"));
         m_onlineAlgorithmCombo->addItem(QStringLiteral("Paper Gaussian (GPU)"),
             static_cast<int>(spraythickness::ThicknessModelKind::PaperGaussian));
         m_onlinePoseSourceCombo = new QComboBox(onlineGroup);
-        m_onlinePoseSourceCombo->addItem(QStringLiteral("Virtual validation"),
-            static_cast<int>(OnlinePoseSource::Virtual));
+        m_onlinePoseSourceCombo->setObjectName(QStringLiteral("onlinePoseSource"));
         m_onlinePoseSourceCombo->addItem(QStringLiteral("Live RWS"),
             static_cast<int>(OnlinePoseSource::LiveRws));
+        m_onlinePoseSourceCombo->addItem(QStringLiteral("Virtual validation"),
+            static_cast<int>(OnlinePoseSource::Virtual));
+        m_onlinePoseSourceCombo->addItem(QStringLiteral("Offline scene simulation"),
+            static_cast<int>(OnlinePoseSource::SceneSimulation));
+        m_onlineSceneOptions = new QWidget(onlineGroup);
+        auto* onlineSceneLayout = new QVBoxLayout(m_onlineSceneOptions);
+        onlineSceneLayout->setContentsMargins(0, 0, 0, 0);
+        m_onlineSceneButton = new QPushButton(QStringLiteral("Load current project scene"), m_onlineSceneOptions);
+        m_onlineSceneButton->setObjectName(QStringLiteral("onlineLoadScene"));
+        onlineSceneLayout->addWidget(m_onlineSceneButton);
+        m_onlineTcpCombo = new QComboBox(m_onlineSceneOptions);
+        m_onlineTcpCombo->setObjectName(QStringLiteral("onlineConfiguredTcp"));
+        m_onlineTcpCombo->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+        auto* tcpForm = new QFormLayout();
+        tcpForm->addRow(QStringLiteral("Spray gun TCP"), m_onlineTcpCombo);
+        onlineSceneLayout->addLayout(tcpForm);
+        m_onlineConfirmButton = new QPushButton(QStringLiteral("Confirm TCP and target"), m_onlineSceneOptions);
+        m_onlineConfirmButton->setObjectName(QStringLiteral("onlineConfirmBinding"));
+        onlineSceneLayout->addWidget(m_onlineConfirmButton);
+        m_onlineBindingLabel = new QLabel(QStringLiteral("Select a configured TCP and target, then confirm."), m_onlineSceneOptions);
+        m_onlineBindingLabel->setWordWrap(true);
+        onlineSceneLayout->addWidget(m_onlineBindingLabel);
+        connect(m_onlineSceneButton, &QPushButton::clicked, this, &CoatingAnalysisPanel::onlineSceneLoadRequested);
+        connect(m_onlineConfirmButton, &QPushButton::clicked, this, &CoatingAnalysisPanel::onlineBindingConfirmRequested);
+        connect(m_onlineTcpCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, [this](int) { emit onlineBindingChanged(); });
+        m_onlineSceneMotionOptions = new QGroupBox(QStringLiteral("Positioner and trajectory simulation"), onlineGroup);
+        auto* sceneMotionLayout = new QVBoxLayout(m_onlineSceneMotionOptions);
+        auto* sceneMotionForm = new QFormLayout();
+        sceneMotionForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+        m_onlinePositionerCombo = new QComboBox(m_onlineSceneMotionOptions);
+        m_onlinePositionerCombo->setObjectName(QStringLiteral("onlinePositionerJoint"));
+        m_onlinePositionerCombo->setSizePolicy(QSizePolicy::Ignored,QSizePolicy::Fixed);
+        m_onlineSceneRpmSource = new QComboBox(m_onlineSceneMotionOptions);
+        m_onlineSceneRpmSource->setObjectName(QStringLiteral("onlineSceneRpmSource"));
+        m_onlineSceneRpmSource->addItems({QStringLiteral("Use trajectory positioner speed"),QStringLiteral("Manual speed")});
+        m_onlineSceneRpmSource->setSizePolicy(QSizePolicy::Ignored,QSizePolicy::Fixed);
+        m_onlineSceneRpm = new QDoubleSpinBox(m_onlineSceneMotionOptions);
+        m_onlineSceneRpm->setObjectName(QStringLiteral("onlineSceneRpm"));
+        m_onlineSceneRpm->setRange(-1000.0,1000.0); m_onlineSceneRpm->setValue(30.0);
+        m_onlineSceneRpm->setSuffix(QStringLiteral(" rpm"));
+        sceneMotionForm->addRow(new QLabel(QStringLiteral("Positioner / rotary joint"),m_onlineSceneMotionOptions));
+        sceneMotionForm->addRow(m_onlinePositionerCombo);
+        sceneMotionForm->addRow(new QLabel(QStringLiteral("Speed source"),m_onlineSceneMotionOptions));
+        sceneMotionForm->addRow(m_onlineSceneRpmSource);
+        m_onlineSceneRpmLabel = new QLabel(QStringLiteral("Manual rotation speed"),m_onlineSceneMotionOptions);
+        sceneMotionForm->addRow(m_onlineSceneRpmLabel,m_onlineSceneRpm);
+        sceneMotionLayout->addLayout(sceneMotionForm);
+        m_onlineSceneSimulate = new QPushButton(QStringLiteral("Simulate solved group and spraying"),m_onlineSceneMotionOptions);
+        m_onlineSceneSimulate->setObjectName(QStringLiteral("onlineSimulateGroup"));
+        m_onlineSceneRotate = new QPushButton(QStringLiteral("Rotate positioner and workpiece"),m_onlineSceneMotionOptions);
+        m_onlineSceneRotate->setObjectName(QStringLiteral("onlineRotatePositioner"));
+        m_onlineSceneStop = new QPushButton(QStringLiteral("Stop simulation / rotation"),m_onlineSceneMotionOptions);
+        m_onlineSceneStop->setObjectName(QStringLiteral("onlineStopSceneMotion"));
+        sceneMotionLayout->addWidget(m_onlineSceneSimulate);
+        sceneMotionLayout->addWidget(m_onlineSceneRotate);
+        sceneMotionLayout->addWidget(m_onlineSceneStop);
+        auto* sceneMotionHint = new QLabel(QStringLiteral("Simulation uses the saved whole-group IK. Transfers are powder-off. Rotation keeps the target's current position relative to the table. Reset restores the starting scene."),m_onlineSceneMotionOptions);
+        sceneMotionHint->setWordWrap(true); sceneMotionLayout->addWidget(sceneMotionHint);
+        connect(m_onlineSceneSimulate,&QPushButton::clicked,this,&CoatingAnalysisPanel::onlineSceneSimulationRequested);
+        connect(m_onlineSceneRotate,&QPushButton::clicked,this,&CoatingAnalysisPanel::onlineSceneRotationRequested);
+        connect(m_onlineSceneStop,&QPushButton::clicked,this,&CoatingAnalysisPanel::onlineSceneMotionStopRequested);
+        connect(m_onlineSceneRpmSource,QOverload<int>::of(&QComboBox::currentIndexChanged),this,[this](int){updateOnlineInputUi();});
+        connect(m_onlinePositionerCombo,QOverload<int>::of(&QComboBox::currentIndexChanged),this,[this](int){emit onlineBindingChanged();});
         m_onlineRotationOptions = new QWidget(onlineGroup);
         auto* rotationForm = new QFormLayout(m_onlineRotationOptions);
         rotationForm->setContentsMargins(0, 0, 0, 0);
@@ -1187,9 +1304,28 @@ namespace robot_qt_viewer
         onlineForm->addRow(QStringLiteral("Powder feed direction"),
             m_onlinePowderFeedDirectionCombo);
         onlineLayout->addLayout(onlineForm);
+        onlineLayout->addWidget(m_onlineSceneOptions);
+        onlineLayout->addWidget(m_onlineSceneMotionOptions);
         onlineLayout->addWidget(m_onlineVirtualOptions);
         onlineLayout->addWidget(m_onlineBvhCheckBox);
         onlineLayout->addWidget(m_onlineHistoryCheckBox);
+        m_onlineLocalCorrectionCheckBox = new QCheckBox(
+            QStringLiteral("Tooth-top local deposition correction"), onlineGroup);
+        m_onlineLocalCorrectionCheckBox->setObjectName(QStringLiteral("onlineLocalCorrection"));
+        m_onlineLocalCorrectionCheckBox->setChecked(true);
+        m_onlineLocalCorrectionStatusLabel = new QLabel(onlineGroup);
+        m_onlineLocalCorrectionStatusLabel->setWordWrap(true);
+        onlineLayout->addWidget(m_onlineLocalCorrectionCheckBox);
+        onlineLayout->addWidget(m_onlineLocalCorrectionStatusLabel);
+        m_onlineLocalCorrectionParametersButton = new QPushButton(
+            QStringLiteral("Local correction parameters..."), onlineGroup);
+        onlineLayout->addWidget(m_onlineLocalCorrectionParametersButton);
+        connect(m_onlineLocalCorrectionParametersButton, &QPushButton::clicked,
+            this, &CoatingAnalysisPanel::localCorrectionParametersRequested);
+        connect(m_onlineLocalCorrectionCheckBox, &QCheckBox::toggled, this, [this](bool enabled) {
+            setLocalCorrectionEnabled(enabled);
+            emit localCorrectionEnabledChanged(enabled);
+        });
         m_onlineInfluenceCheckBox = new QCheckBox(QStringLiteral("Show deposition influence"), onlineGroup);
         m_onlineInfluenceCheckBox->setObjectName(QStringLiteral("onlineInfluenceVisible"));
         m_onlineInfluenceCheckBox->setChecked(true);
@@ -1222,11 +1358,13 @@ namespace robot_qt_viewer
             "Controls thickness accumulation only; no equipment command is sent."));
         m_onlineStopButton->setToolTip(m_onlineStartButton->toolTip());
         m_onlineResetButton = new QPushButton(QStringLiteral("Reset thickness"), onlineGroup);
+        m_onlineResetButton->setObjectName(QStringLiteral("onlineResetPrediction"));
         onlineButtons->addWidget(m_onlineStartButton);
         onlineButtons->addWidget(m_onlineStopButton);
         onlineLayout->addLayout(onlineButtons);
         onlineLayout->addWidget(m_onlineResetButton);
         m_onlineStatusLabel = new QLabel(QStringLiteral("Ready to start online prediction."), onlineGroup);
+        m_onlineStatusLabel->setObjectName(QStringLiteral("onlinePredictionStatus"));
         m_onlineStatusLabel->setWordWrap(true);
         onlineLayout->addWidget(m_onlineStatusLabel);
         m_onlineRefreshLabel = new QLabel(onlineGroup);
@@ -1626,8 +1764,25 @@ namespace robot_qt_viewer
             form->setRowWrapPolicy(QFormLayout::WrapLongRows);
             form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
         }
+        connect(m_dynamicSurface,&DynamicSurfacePanel::enabledChanged,this,[this](bool enabled) {
+            if(enabled) { m_predictionModeCombo->setCurrentIndex(0); m_meshSamplingCheckBox->setChecked(false); }
+            m_predictionModeCombo->setEnabled(!enabled);
+            m_predictionModeCombo->setToolTip(enabled ? QStringLiteral("动态表面沉积使用完整模型，不使用周期映射、局部筛选或简化网格。") : QString());
+            m_meshSamplingCheckBox->setEnabled(!enabled);
+        });
         setModeTab(0);
 
+        for(auto* combo : {m_algorithmCombo,m_onlineAlgorithmCombo}) {
+            combo->setView(new QListView(combo));
+            combo->setMaxVisibleItems(12);
+            combo->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+            combo->setMinimumContentsLength(14);
+            // Activated also reloads the selected entry after its library model is updated.
+            connect(combo,QOverload<int>::of(&QComboBox::activated),this,[this,combo](int index) {
+                emit depositionModelSelected(combo->itemData(index,Qt::UserRole+1).toString());
+            });
+        }
+        setDepositionModels({});
         refreshDepositionCurve();
         setLanguageCode(QStringLiteral("en"));
         updateReproductionInputUi();
@@ -1642,6 +1797,8 @@ namespace robot_qt_viewer
             return coatingAnalysisTranslate(m_languageCode, value);
         };
         m_onlineFpsLimitSpinBox->setSpecialValueText(translate(QStringLiteral("Unlimited")));
+        setLocalCorrectionStatus(m_localCorrectionStatus);
+        setDepositionModels(m_depositionModels);
         for(QWidget* widget : findChildren<QWidget*>()) {
             if(auto* group = qobject_cast<QGroupBox*>(widget)) {
                 group->setTitle(translate(group->title()));
@@ -1652,6 +1809,7 @@ namespace robot_qt_viewer
                 label->setText(translate(label->text()));
                 label->setToolTip(translate(label->toolTip()));
             } else if(auto* combo = qobject_cast<QComboBox*>(widget)) {
+                if(combo==m_algorithmCombo || combo==m_onlineAlgorithmCombo)continue;
                 for(int index = 0; index < combo->count(); ++index) {
                     combo->setItemText(index, translate(combo->itemText(index)));
                     combo->setItemData(index,
@@ -1695,9 +1853,21 @@ namespace robot_qt_viewer
         m_onlineActive = active;
         m_onlineSpraying = spraying;
         m_onlineFinishing = finishing;
+        const bool editable = !active && !finishing && !m_onlineOtherTaskRunning
+            && !m_reproductionControlsLocked;
+        for(QWidget* control : {static_cast<QWidget*>(m_localCorrectionCheckBox),
+            static_cast<QWidget*>(m_onlineLocalCorrectionCheckBox),
+            static_cast<QWidget*>(m_reproductionLocalCorrectionCheckBox),
+            static_cast<QWidget*>(m_localCorrectionParametersButton),
+            static_cast<QWidget*>(m_onlineLocalCorrectionParametersButton),
+            static_cast<QWidget*>(m_reproductionLocalCorrectionParametersButton)}) {
+            control->setEnabled(editable);
+        }
         const QString text = coatingAnalysisTranslate(m_languageCode, status);
         if(m_onlineStatusLabel->text() != text) m_onlineStatusLabel->setText(text);
-        m_onlineStartButton->setEnabled(!spraying && !finishing);
+        m_onlineStartButton->setEnabled(!spraying && !finishing
+            && (onlinePoseSource() == OnlinePoseSource::Virtual || m_onlineBindingConfirmed)
+            && (onlinePoseSource() != OnlinePoseSource::SceneSimulation || m_onlineRotating || m_onlineMovingGun));
         m_onlineStopButton->setEnabled(spraying);
         if(stateChanged) updateOnlineInputUi();
     }
@@ -1786,6 +1956,23 @@ namespace robot_qt_viewer
     void CoatingAnalysisPanel::updateOnlineInputUi()
     {
         const bool virtualSource = onlinePoseSource() == OnlinePoseSource::Virtual;
+        const bool sceneSource = onlinePoseSource() == OnlinePoseSource::SceneSimulation;
+        m_onlineSceneOptions->setVisible(!virtualSource);
+        m_onlineSceneMotionOptions->setVisible(sceneSource);
+        const bool sceneBusy = m_onlineMovingGun || m_onlineRotating || m_onlineSpraying || m_onlineFinishing;
+        const bool canSceneStart = sceneSource && m_onlineBindingConfirmed && !m_onlineOtherTaskRunning && !sceneBusy;
+        m_onlineSceneSimulate->setEnabled(canSceneStart);
+        m_onlineSceneRotate->setEnabled(canSceneStart);
+        m_onlineSceneStop->setEnabled(sceneSource && (sceneBusy || m_onlineActive));
+        m_onlinePositionerCombo->setEnabled(!m_onlineActive);
+        m_onlineSceneRpmSource->setEnabled(!sceneBusy);
+        m_onlineSceneRpm->setEnabled(!sceneBusy && !onlineSceneUsesPlannedRpm());
+        m_onlineSceneRpm->setVisible(!onlineSceneUsesPlannedRpm());
+        m_onlineSceneRpmLabel->setVisible(!onlineSceneUsesPlannedRpm());
+        m_onlineTcpCombo->setEnabled(!m_onlineActive && !m_onlineOtherTaskRunning);
+        m_onlineConfirmButton->setEnabled(!m_onlineActive && !m_onlineOtherTaskRunning
+            && !onlineTcpAttachmentId().isEmpty() && !selectedWorkpieceId().isEmpty());
+        m_onlineSceneButton->setEnabled(!m_onlineFinishing);
         m_onlineVirtualOptions->setVisible(virtualSource);
         m_onlineRotationOptions->setVisible(virtualSource);
         m_onlineRandomRotationLabel->setVisible(onlineRandomRotationAxisEnabled());
@@ -1832,8 +2019,9 @@ namespace robot_qt_viewer
             }
         }
         for(QWidget* section : m_predictionSections) {
-            if(section != nullptr) {
-                section->setVisible(m_mode == CoatingAnalysisMode::Prediction);
+            if(section != nullptr && section!=m_algorithmCombo->parentWidget()) {
+                section->setVisible(m_mode == CoatingAnalysisMode::Prediction
+                        || (simulation && section == m_bvhCheckBox->parentWidget()));
             }
         }
         for(QWidget* section : m_onlineSections) {
@@ -1883,11 +2071,12 @@ namespace robot_qt_viewer
                 section->setVisible(m_mode == CoatingAnalysisMode::Online);
             }
             for(QWidget* section : m_predictionSections) {
-                if(section != nullptr) {
+                if(section != nullptr && section!=m_algorithmCombo->parentWidget()) {
                     // Set final visibility once. Showing a hidden local group on
                     // every progress update temporarily reserves its height and
                     // compresses the running status before the next layout pass.
-                    bool visible = m_mode == CoatingAnalysisMode::Prediction;
+                    bool visible = m_mode == CoatingAnalysisMode::Prediction
+                        || (simulationActive && section == m_bvhCheckBox->parentWidget());
                     if(section == m_localConfigGroup) {
                         visible = visible && (viewModel.localMode
                             || viewModel.axisymmetricProfileMode
@@ -1902,7 +2091,10 @@ namespace robot_qt_viewer
             updateReproductionSourceUi();
         }
         const bool simulationLocked = viewModel.predictionRunning || viewModel.simulationRunning;
-        m_runSimulationButton->setEnabled(viewModel.canRunSimulation && !simulationLocked);
+        m_runSimulationButton->setProperty("predictionRunning",viewModel.simulationRunning);
+        m_runSimulationButton->setText(viewModel.simulationRunning ? QStringLiteral("停止仿真")
+            : coatingAnalysisTranslate(m_languageCode,QStringLiteral("Run simulation")));
+        m_runSimulationButton->setEnabled(viewModel.simulationRunning || (viewModel.canRunSimulation && !simulationLocked));
         m_exportSimulationButton->setEnabled(viewModel.canExportSimulation && !simulationLocked);
         for(QDoubleSpinBox* spin : { m_plateSideSpinBox, m_plateCellSpinBox,
             m_simulationDistanceSpinBox, m_trajectoryOverrunSpinBox,
@@ -1980,7 +2172,7 @@ namespace robot_qt_viewer
         }
         m_workpieceCombo->setEnabled(
             !viewModel.workpieces.isEmpty() && !viewModel.predictionRunning
-            && m_mode != CoatingAnalysisMode::Online);
+            && (m_mode != CoatingAnalysisMode::Online || !m_onlineActive));
         const bool standardControlsEnabled = !viewModel.predictionRunning
             && !viewModel.simulationActive;
         m_openModelButton->setEnabled(standardControlsEnabled);
@@ -2005,25 +2197,71 @@ namespace robot_qt_viewer
             && viewModel.hasTrajectory
             && viewModel.trajectorySamplingApplyRequired);
         updateTrajectorySamplingUi();
-        m_algorithmCombo->setEnabled(standardControlsEnabled);
+        m_algorithmCombo->setEnabled(!viewModel.predictionRunning
+            && !viewModel.reproductionRunning && !viewModel.simulationRunning);
         m_onlineAlgorithmCombo->setEnabled(!m_onlineActive && !viewModel.predictionRunning);
         const bool onlineDirectionsEnabled = !viewModel.predictionRunning && !viewModel.reproductionRunning;
         m_onlineSprayDirectionCombo->setEnabled(onlineDirectionsEnabled);
         m_onlinePowderFeedDirectionCombo->setEnabled(onlineDirectionsEnabled);
         m_onlineBvhCheckBox->setEnabled(!m_onlineActive);
         m_onlineHistoryCheckBox->setEnabled(!m_onlineActive);
+        const bool localCorrectionEditable = !viewModel.predictionRunning
+            && !viewModel.reproductionRunning && !viewModel.simulationRunning
+            && !m_onlineActive && !m_onlineFinishing;
+        m_localCorrectionCheckBox->setEnabled(localCorrectionEditable);
+        m_onlineLocalCorrectionCheckBox->setEnabled(localCorrectionEditable);
+        m_reproductionLocalCorrectionCheckBox->setEnabled(localCorrectionEditable);
+        m_localCorrectionParametersButton->setEnabled(localCorrectionEditable);
+        m_onlineLocalCorrectionParametersButton->setEnabled(localCorrectionEditable);
+        m_reproductionLocalCorrectionParametersButton->setEnabled(localCorrectionEditable);
+        m_onlineBindingConfirmed = viewModel.onlineBindingConfirmed;
+        {
+            const QSignalBlocker blocker(m_onlineTcpCombo);
+            const QString attachmentId = onlineTcpAttachmentId();
+            const QString frameId = onlineTcpFrameId();
+            m_onlineTcpCombo->clear();
+            int selection = -1;
+            for(const auto& tcp : viewModel.onlineTcps) {
+                m_onlineTcpCombo->addItem(tcp.label, tcp.attachmentId);
+                const int index = m_onlineTcpCombo->count() - 1;
+                m_onlineTcpCombo->setItemData(index, tcp.frameId, Qt::UserRole + 1);
+                m_onlineTcpCombo->setItemData(index, tcp.label, Qt::ToolTipRole);
+                if(tcp.attachmentId == attachmentId && tcp.frameId == frameId) selection = index;
+            }
+            if(selection >= 0) m_onlineTcpCombo->setCurrentIndex(selection);
+        }
+        {
+            const QSignalBlocker blocker(m_onlinePositionerCombo);
+            const QString robotId=onlinePositionerRobotId(), joint=onlinePositionerJointName();
+            m_onlinePositionerCombo->clear();
+            int selected=-1;
+            for(const auto& axis:viewModel.onlinePositionerAxes) {
+                m_onlinePositionerCombo->addItem(axis.label,axis.robotId);
+                const int index=m_onlinePositionerCombo->count()-1;
+                m_onlinePositionerCombo->setItemData(index,axis.jointName,Qt::UserRole+1);
+                if(robotId==axis.robotId && joint==axis.jointName) selected=index;
+            }
+            if(selected>=0) m_onlinePositionerCombo->setCurrentIndex(selected);
+        }
+        m_onlineBindingLabel->setText(coatingAnalysisTranslate(m_languageCode,
+            m_onlineBindingConfirmed ? QStringLiteral("TCP and target confirmed. Only the target receives thickness.")
+                : QStringLiteral("Select a configured TCP and target, then confirm.")));
         m_onlineOtherTaskRunning = viewModel.predictionRunning || viewModel.reproductionRunning;
         updateOnlineInputUi();
         m_onlineStartButton->setEnabled(!m_onlineSpraying && !m_onlineFinishing
-            && !viewModel.predictionRunning && !viewModel.reproductionRunning);
+            && !viewModel.predictionRunning && !viewModel.reproductionRunning
+            && (onlinePoseSource() == OnlinePoseSource::Virtual || m_onlineBindingConfirmed)
+            && (onlinePoseSource() != OnlinePoseSource::SceneSimulation || m_onlineRotating || m_onlineMovingGun));
         m_onlineStopButton->setEnabled(m_onlineSpraying);
         m_sprayDirectionCombo->setEnabled(standardControlsEnabled);
         m_powderFeedDirectionCombo->setEnabled(standardControlsEnabled);
-        m_bvhCheckBox->setEnabled(standardControlsEnabled);
-        m_historyCheckBox->setEnabled(standardControlsEnabled);
+        m_dynamicSurface->setRunning(viewModel.predictionRunning || viewModel.simulationRunning);
+        m_bvhCheckBox->setEnabled((standardControlsEnabled || simulationActive) && !simulationLocked);
+        m_historyCheckBox->setEnabled((standardControlsEnabled || simulationActive) && !simulationLocked);
+        m_meshSamplingCheckBox->setEnabled(standardControlsEnabled && !m_dynamicSurface->enabled());
         m_predictionModeCombo->setEnabled(
             viewModel.hasModel && viewModel.hasTrajectory
-            && !viewModel.predictionRunning);
+            && !viewModel.predictionRunning && !m_dynamicSurface->enabled());
         const bool spatialMode = spatialInfluenceFilteringEnabled();
         const bool adaptiveMode = adaptiveMeshPredictionEnabled();
         const bool localCandidateMode = localCandidateVertexPredictionEnabled();
@@ -2135,9 +2373,39 @@ namespace robot_qt_viewer
         return m_bvhCheckBox->isChecked();
     }
 
+    bool CoatingAnalysisPanel::localCorrectionEnabled() const
+    {
+        return m_localCorrectionEnabled;
+    }
+
+    void CoatingAnalysisPanel::setLocalCorrectionEnabled(bool enabled)
+    {
+        m_localCorrectionEnabled = enabled;
+        for(QCheckBox* check : {m_localCorrectionCheckBox,
+            m_onlineLocalCorrectionCheckBox, m_reproductionLocalCorrectionCheckBox}) {
+            if(!check) continue;
+            const QSignalBlocker blocker(check);
+            check->setChecked(enabled);
+        }
+    }
+
+    void CoatingAnalysisPanel::setLocalCorrectionStatus(const QString& status)
+    {
+        m_localCorrectionStatus = status;
+        for(QLabel* label : {m_localCorrectionStatusLabel,
+            m_onlineLocalCorrectionStatusLabel, m_reproductionLocalCorrectionStatusLabel}) {
+            if(label) label->setText(coatingAnalysisTranslate(m_languageCode, status));
+        }
+    }
+
     bool CoatingAnalysisPanel::historyCorrectionEnabled() const
     {
         return m_historyCheckBox->isChecked();
+    }
+
+    bool CoatingAnalysisPanel::meshSamplingAssessmentEnabled() const
+    {
+        return m_meshSamplingCheckBox->isChecked();
     }
 
     bool CoatingAnalysisPanel::periodicLocalPredictionEnabled() const
@@ -2161,6 +2429,7 @@ namespace robot_qt_viewer
 
     PredictionInputMode CoatingAnalysisPanel::predictionInputMode() const
     {
+        if(m_dynamicSurface->enabled()) return PredictionInputMode::CompleteAllSprayPoints;
         return static_cast<PredictionInputMode>(
             m_predictionModeCombo->currentData().toInt());
     }
@@ -2378,6 +2647,21 @@ namespace robot_qt_viewer
         return m_onlineInfluenceThresholdSpinBox->value() * 0.01;
     }
 
+    QString CoatingAnalysisPanel::onlineTcpAttachmentId() const
+    { return m_onlineTcpCombo->currentData().toString(); }
+
+    QString CoatingAnalysisPanel::onlineTcpFrameId() const
+    { return m_onlineTcpCombo->currentData(Qt::UserRole + 1).toString(); }
+
+    QString CoatingAnalysisPanel::onlinePositionerRobotId() const
+    { return m_onlinePositionerCombo->currentData().toString(); }
+    QString CoatingAnalysisPanel::onlinePositionerJointName() const
+    { return m_onlinePositionerCombo->currentData(Qt::UserRole+1).toString(); }
+    bool CoatingAnalysisPanel::onlineSceneUsesPlannedRpm() const
+    { return m_onlineSceneRpmSource->currentIndex()==0; }
+    double CoatingAnalysisPanel::onlineSceneRpm() const
+    { return m_onlineSceneRpm->value(); }
+
     OnlinePoseSource CoatingAnalysisPanel::onlinePoseSource() const
     {
         return static_cast<OnlinePoseSource>(m_onlinePoseSourceCombo->currentData().toInt());
@@ -2441,6 +2725,12 @@ namespace robot_qt_viewer
 
     void CoatingAnalysisPanel::updateReproductionInputUi()
     {
+        if(m_algorithmCombo) {
+            m_algorithmCombo->parentWidget()->setVisible(m_mode==CoatingAnalysisMode::Prediction
+                || m_mode==CoatingAnalysisMode::Simulation
+                || (m_mode==CoatingAnalysisMode::Reproduction
+                    && reproductionAlgorithm()==spraythickness::ReproductionAlgorithmKind::CurrentMethod));
+        }
         if(m_reproductionAlgorithmCombo == nullptr) {
             return;
         }
@@ -2815,6 +3105,52 @@ namespace robot_qt_viewer
     {
         return static_cast<SavedTrajectorySource>(
             m_savedTrajectorySourceCombo->currentData().toInt());
+    }
+
+    void CoatingAnalysisPanel::setDepositionParameters(const spraythickness::PaperGaussianParameters& p)
+    {
+        if(m_curveWidget)m_curveWidget->setParameters(p);
+        const QString id=QString::fromStdString(p.calibrationModelId);
+        if(id!=m_depositionModelId) {
+            m_depositionModelId=id;
+            setDepositionModels(m_depositionModels);
+        } else {
+            // Rejected user selections must return to the controller's actual snapshot.
+            for(auto* combo : {m_algorithmCombo,m_onlineAlgorithmCombo}) {
+                const QSignalBlocker blocker(combo);
+                const auto selectedId=id.isEmpty() && m_depositionModels.contains(QStringLiteral("paper_gaussian"))
+                    ? QStringLiteral("paper_gaussian"):id;
+                combo->setCurrentIndex(combo->findData(selectedId,Qt::UserRole+1));
+                combo->setToolTip(combo->currentText());
+            }
+        }
+    }
+
+    void CoatingAnalysisPanel::setDepositionModels(const QMap<QString,QString>& models)
+    {
+        m_depositionModels=models;
+        for(auto* combo : {m_algorithmCombo,m_onlineAlgorithmCombo}) {
+            const QSignalBlocker blocker(combo);
+            combo->clear();
+            const auto add=[combo](const QString& id,const QString& name) {
+                combo->addItem(name,static_cast<int>(spraythickness::ThicknessModelKind::PaperGaussian));
+                combo->setItemData(combo->count()-1,id,Qt::UserRole+1);
+                combo->setItemData(combo->count()-1,name,Qt::ToolTipRole);
+            };
+            if(!models.contains(QStringLiteral("paper_gaussian")))
+                add(QString(),coatingAnalysisTranslate(m_languageCode,QStringLiteral("Paper Gaussian (GPU)")));
+            for(auto it=models.cbegin();it!=models.cend();++it)add(it.key(),it.value());
+            if(!m_depositionModelId.isEmpty() && !models.contains(m_depositionModelId))
+                add(m_depositionModelId,m_depositionModelId);
+            const auto selectedId=m_depositionModelId.isEmpty() && models.contains(QStringLiteral("paper_gaussian"))
+                ? QStringLiteral("paper_gaussian"):m_depositionModelId;
+            combo->setCurrentIndex(combo->findData(selectedId,Qt::UserRole+1));
+            combo->setToolTip(combo->currentText());
+            int popupWidth=0;
+            for(int i=0;i<combo->count();++i)
+                popupWidth=std::max(popupWidth,combo->fontMetrics().horizontalAdvance(combo->itemText(i))+48);
+            combo->view()->setMinimumWidth(popupWidth);
+        }
     }
 
     void CoatingAnalysisPanel::refreshDepositionCurve()

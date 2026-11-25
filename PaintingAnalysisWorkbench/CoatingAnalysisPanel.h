@@ -6,6 +6,7 @@
 #include <SprayThicknessPrediction/ThicknessPrediction.h>
 
 #include <QHash>
+#include <QMap>
 #include <QWidget>
 #include <QVector>
 
@@ -29,9 +30,10 @@ class QTabWidget;
 
 namespace robot_qt_viewer
 {
-    enum class OnlinePoseSource { LiveRws, Virtual };
+    enum class OnlinePoseSource { LiveRws, Virtual, SceneSimulation };
 
     class DepositionCurveWidget;
+    class DynamicSurfacePanel;
 
     enum class PredictionInputMode
     {
@@ -76,6 +78,8 @@ namespace robot_qt_viewer
         Q_OBJECT
 
     public:
+        void setDepositionParameters(const spraythickness::PaperGaussianParameters& parameters);
+        void setDepositionModels(const QMap<QString,QString>& models);
         explicit CoatingAnalysisPanel(QWidget* parent = nullptr);
         void applyViewModel(const CoatingAnalysisViewModel& viewModel);
         void setLanguageCode(const QString& languageCode);
@@ -104,6 +108,12 @@ namespace robot_qt_viewer
         bool onlineInfluencePreviewEnabled() const;
         double onlineInfluenceThresholdRatio() const;
         OnlinePoseSource onlinePoseSource() const;
+        QString onlineTcpAttachmentId() const;
+        QString onlineTcpFrameId() const;
+        QString onlinePositionerRobotId() const;
+        QString onlinePositionerJointName() const;
+        bool onlineSceneUsesPlannedRpm() const;
+        double onlineSceneRpm() const;
         Eigen::Vector3d onlineRotationAxis() const;
         bool onlineRandomRotationAxisEnabled() const;
         double onlineRotationRpm() const;
@@ -114,6 +124,11 @@ namespace robot_qt_viewer
         double timeStepSeconds() const;
         bool bvhOcclusionEnabled() const;
         bool historyCorrectionEnabled() const;
+        bool localCorrectionEnabled() const;
+        void setLocalCorrectionEnabled(bool enabled);
+        void setLocalCorrectionStatus(const QString& status);
+        bool meshSamplingAssessmentEnabled() const;
+        DynamicSurfacePanel* dynamicSurfacePanel() const { return m_dynamicSurface; }
         PredictionInputMode predictionInputMode() const;
         bool periodicLocalPredictionEnabled() const;
         bool axisymmetricProfilePredictionEnabled() const;
@@ -164,6 +179,12 @@ namespace robot_qt_viewer
         void onlineRotationStopRequested();
         void onlineResetRequested();
         void onlineInputChanged();
+        void onlineBindingChanged();
+        void onlineBindingConfirmRequested();
+        void onlineSceneLoadRequested();
+        void onlineSceneSimulationRequested();
+        void onlineSceneRotationRequested();
+        void onlineSceneMotionStopRequested();
         void onlineToolDirectionsChanged();
         void onlineInfluenceDisplayChanged();
         void cancelPredictionRequested();
@@ -176,7 +197,11 @@ namespace robot_qt_viewer
         void axisymmetricProfileSampleCountChanged();
         void spatialGridParametersChanged();
         void depositionDirectionsChanged();
+        void depositionModelSelected(const QString& modelId);
         void trajectorySamplingParametersChanged();
+        void meshSamplingAssessmentChanged();
+        void localCorrectionEnabledChanged(bool enabled);
+        void localCorrectionParametersRequested();
         void trajectorySamplingApplyRequested();
         void profileRegionSelectionRequested();
         void adaptiveRegionSelectionRequested();
@@ -222,10 +247,27 @@ namespace robot_qt_viewer
         void applyReproductionRecommendedSetup();
         bool reproductionForcesOriginalTrajectoryPoints() const;
 
+        DynamicSurfacePanel* m_dynamicSurface = nullptr;
         QComboBox* m_workpieceCombo = nullptr;
+        QMap<QString,QString> m_depositionModels;
+        QString m_depositionModelId;
         QComboBox* m_algorithmCombo = nullptr;
         QComboBox* m_onlineAlgorithmCombo = nullptr;
         QComboBox* m_onlinePoseSourceCombo = nullptr;
+        QWidget* m_onlineSceneOptions = nullptr;
+        QWidget* m_onlineSceneMotionOptions = nullptr;
+        QComboBox* m_onlinePositionerCombo = nullptr;
+        QComboBox* m_onlineSceneRpmSource = nullptr;
+        QDoubleSpinBox* m_onlineSceneRpm = nullptr;
+        QLabel* m_onlineSceneRpmLabel = nullptr;
+        QPushButton* m_onlineSceneSimulate = nullptr;
+        QPushButton* m_onlineSceneRotate = nullptr;
+        QPushButton* m_onlineSceneStop = nullptr;
+        QComboBox* m_onlineTcpCombo = nullptr;
+        QPushButton* m_onlineConfirmButton = nullptr;
+        QPushButton* m_onlineSceneButton = nullptr;
+        QLabel* m_onlineBindingLabel = nullptr;
+        bool m_onlineBindingConfirmed = false;
         QPushButton* m_onlineMoveStartButton = nullptr;
         QPushButton* m_onlineMoveStopButton = nullptr;
         QPushButton* m_onlineRotationStartButton = nullptr;
@@ -278,6 +320,18 @@ namespace robot_qt_viewer
         QPushButton* m_applyTrajectorySamplingButton = nullptr;
         QCheckBox* m_bvhCheckBox = nullptr;
         QCheckBox* m_historyCheckBox = nullptr;
+        QCheckBox* m_localCorrectionCheckBox = nullptr;
+        QCheckBox* m_onlineLocalCorrectionCheckBox = nullptr;
+        QCheckBox* m_reproductionLocalCorrectionCheckBox = nullptr;
+        QLabel* m_localCorrectionStatusLabel = nullptr;
+        QLabel* m_onlineLocalCorrectionStatusLabel = nullptr;
+        QLabel* m_reproductionLocalCorrectionStatusLabel = nullptr;
+        QPushButton* m_localCorrectionParametersButton = nullptr;
+        QPushButton* m_onlineLocalCorrectionParametersButton = nullptr;
+        QPushButton* m_reproductionLocalCorrectionParametersButton = nullptr;
+        bool m_localCorrectionEnabled = true;
+        QString m_localCorrectionStatus;
+        QCheckBox* m_meshSamplingCheckBox = nullptr;
         QComboBox* m_predictionModeCombo = nullptr;
         QWidget* m_spatialGridOptionsWidget = nullptr;
         QCheckBox* m_overrideSpatialGridCellSizeCheckBox = nullptr;

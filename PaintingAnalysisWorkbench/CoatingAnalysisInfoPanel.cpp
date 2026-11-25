@@ -2,6 +2,7 @@
 #include "CoatingAnalysisLanguage.h"
 
 #include <SprayThicknessPrediction/ThicknessPrediction.h>
+#include <SprayThicknessPrediction/MeshSamplingAssessment.h>
 
 #include <QLabel>
 #include <QRegularExpression>
@@ -47,6 +48,8 @@ namespace robot_qt_viewer
         addSection(layout, QStringLiteral("Thermal History"), m_historyReadout, content);
         addSection(layout, QStringLiteral("Thickness"), m_thicknessReadout, content);
         addSection(layout, QStringLiteral("Analysis"), m_analysisReadout, content);
+        m_meshSamplingSection = addSection(layout, QStringLiteral("Mesh density"),
+            m_meshSamplingReadout, m_meshSamplingContent);
         addSection(layout, QStringLiteral("Computation"), m_computationReadout, content);
         m_validationSection = addSection(
             layout, QStringLiteral("Validation"), m_validationReadout, m_validationContent);
@@ -54,28 +57,7 @@ namespace robot_qt_viewer
             layout, QStringLiteral("Simulation"), m_simulationReadout, m_simulationContent);
         layout->addStretch(1);
 
-        {
-            const spraythickness::PaperGaussianParameters parameters;
-            setReadout(m_depositionReadout,
-                QStringLiteral("Amplitude    : %1 mm\n"
-                               "Rotation     : %2\n"
-                               "Phi offset   : %3\n"
-                               "Psi offset   : %4\n"
-                               "Sigma phi    : %5\n"
-                               "Sigma psi    : %6\n"
-                               "Ref distance : %7 mm\n"
-                               "Ref angle    : %8 deg\n"
-                               "Ref exposure : %9 s")
-                    .arg(parameters.amplitudeMillimeters, 0, 'g', 6)
-                    .arg(angleText(parameters.rotationRadians))
-                    .arg(angleText(parameters.phiOffsetRadians))
-                    .arg(angleText(parameters.psiOffsetRadians))
-                    .arg(angleText(parameters.sigmaPhiRadians))
-                    .arg(angleText(parameters.sigmaPsiRadians))
-                    .arg(parameters.referenceDistanceMeters * 1000.0, 0, 'g', 6)
-                    .arg(parameters.referenceAngleDegrees, 0, 'g', 6)
-                    .arg(parameters.referenceExposureSeconds, 0, 'g', 6));
-        }
+        setDepositionParameters(spraythickness::PaperGaussianParameters{});
         {
             const spraythickness::HeatHistoryParameters parameters;
             setReadout(m_historyReadout,
@@ -92,6 +74,45 @@ namespace robot_qt_viewer
         }
         setLanguageCode(QStringLiteral("en"));
     }
+
+    void CoatingAnalysisInfoPanel::setPublishedDepositionInfo(const QString& algorithm)
+    {
+        m_hasDepositionParameters=false;
+        setReadout(m_depositionReadout,algorithm+QStringLiteral("\n")+(m_languageCode.startsWith(QStringLiteral("zh"))
+            ?QStringLiteral("使用该论文对应的沉积函数及标定参数。")
+            :QStringLiteral("Uses the deposition law and calibration of the selected paper.")));
+    }
+
+    void CoatingAnalysisInfoPanel::setDepositionParameters(const spraythickness::PaperGaussianParameters& parameters)
+    {
+        if(m_hasDepositionParameters && spraythickness::samePaperGaussianParameters(m_depositionParameters,parameters))return;
+        m_depositionParameters=parameters;m_hasDepositionParameters=true;
+        const auto history=parameters.useCalibratedHistory?parameters.calibratedHistory:spraythickness::HeatHistoryParameters{};
+        setReadout(m_historyReadout,QStringLiteral("Correction amp: %1\nHistory scale : %2 s\nRef history   : %3 s\nCooling time  : %4 s\nActivity thr  : %5")
+            .arg(history.correctionAmplitude,0,'g',6).arg(history.historyScaleSeconds,0,'g',6)
+            .arg(history.referenceHistorySeconds,0,'g',6).arg(history.coolingTimeSeconds,0,'g',6)
+            .arg(history.activityThresholdRatio,0,'g',6));
+            setReadout(m_depositionReadout,
+                QStringLiteral("Model        : %10\nAmplitude    : %1 mm\n"
+                               "Rotation     : %2\n"
+                               "Phi offset   : %3\n"
+                               "Psi offset   : %4\n"
+                               "Sigma phi    : %5\n"
+                               "Sigma psi    : %6\n"
+                               "Ref distance : %7 mm\n"
+                               "Ref angle    : %8 deg\n"
+                               "Ref exposure : %9 s")
+                    .arg(parameters.amplitudeMillimeters, 0, 'g', 6)
+                    .arg(angleText(parameters.rotationRadians))
+                    .arg(angleText(parameters.phiOffsetRadians))
+                    .arg(angleText(parameters.psiOffsetRadians))
+                    .arg(angleText(parameters.sigmaPhiRadians))
+                    .arg(angleText(parameters.sigmaPsiRadians))
+                    .arg(parameters.referenceDistanceMeters * 1000.0, 0, 'g', 6)
+                    .arg(parameters.referenceAngleDegrees, 0, 'g', 6)
+                    .arg(parameters.referenceExposureSeconds, 0, 'g', 6)
+                    .arg(parameters.calibrationModelId.empty()?QStringLiteral("Platform default"):QString::fromUtf8(parameters.calibrationModelId.c_str())));
+        }
 
     void CoatingAnalysisInfoPanel::setLanguageCode(const QString& languageCode)
     {
@@ -115,6 +136,10 @@ namespace robot_qt_viewer
         const QString translated = compactColonSpacing(
             coatingAnalysisTranslate(m_languageCode, text));
         if(label->text() != translated) label->setText(translated);
+        const QVariant tooltip = label->property("sourceToolTip");
+        if(tooltip.isValid()) {
+            label->setToolTip(coatingAnalysisTranslate(m_languageCode, tooltip.toString()));
+        }
     }
 
     QToolButton* CoatingAnalysisInfoPanel::addSection(
@@ -237,6 +262,7 @@ namespace robot_qt_viewer
 
     void CoatingAnalysisInfoPanel::applyThicknessInfo(const CoatingAnalysisInfoView& view)
     {
+        applyMeshSamplingInfo(view);
         const bool simulation = view.simulationActive;
         if(view.hasThickness) {
             const spraythickness::ThicknessMetrics& metrics = view.thicknessMetrics;
@@ -459,5 +485,82 @@ namespace robot_qt_viewer
                 : QStringLiteral("No computation data yet."));
             setReadout(m_analysisReadout, QStringLiteral("No thickness result yet."));
         }
+    }
+
+    void CoatingAnalysisInfoPanel::applyMeshSamplingInfo(const CoatingAnalysisInfoView& view)
+    {
+        const auto& assessment = view.meshSamplingAssessment;
+        // Hide stale offline diagnostics when another workbench mode is active.
+        m_meshSamplingSection->setVisible(static_cast<bool>(assessment));
+        m_meshSamplingContent->setVisible(assessment && m_meshSamplingSection->isChecked());
+        if(!assessment) return;
+        const auto& a = *assessment;
+        QStringList lines;
+        QStringList details;
+        const char* color = "#9e9e9e";
+        if(!a.applicable) {
+            lines << QStringLiteral("Mesh density:Unavailable")
+                  << QStringLiteral("Hover over this result for details.");
+            details << QString::fromStdString(a.unavailableReason);
+        } else {
+            if(a.assessedPointCount == 0) {
+                lines << QStringLiteral("Mesh density:Unable to assess")
+                      << QStringLiteral("No spray footprints hit the front of the workpiece.");
+            } else if(a.insufficientPointCount > 0) {
+                // A few sparse edge footprints must not label the entire model
+                // as insufficient; report the affected part and its proportion.
+                const bool allInsufficient = a.insufficientPointCount == a.assessedPointCount;
+                color = allInsufficient ? "#e57373" : "#d8a52a";
+                lines << (allInsufficient ? QStringLiteral("Mesh density:Insufficient")
+                                         : QStringLiteral("Mesh density:Local refinement needed"));
+            } else if(a.recommendedPointCount < a.assessedPointCount) {
+                color = "#d8a52a";
+                lines << QStringLiteral("Mesh density:Meets minimum");
+            } else {
+                color = "#57b87a";
+                lines << QStringLiteral("Mesh density:Sufficient");
+            }
+            if(a.assessedPointCount > 0) {
+                lines << QStringLiteral("Minimum density met:%1%")
+                             .arg(100.0 * (a.assessedPointCount - a.insufficientPointCount)
+                                 / a.assessedPointCount, 0, 'f', 2)
+                      << QStringLiteral("Recommended density met:%1%")
+                             .arg(100.0 * a.recommendedPointCount / a.assessedPointCount, 0, 'f', 2);
+                if(a.insufficientPointCount > 0) {
+                    lines << QStringLiteral("Suggestion:Refine %1 sparse footprints (minimum %2 vertices).")
+                                 .arg(static_cast<qulonglong>(a.insufficientPointCount))
+                                 .arg(static_cast<qulonglong>(a.minimumVisibleVertexCount));
+                } else if(a.recommendedPointCount < a.assessedPointCount) {
+                    lines << QStringLiteral("Suggestion:Usable; refine sparse areas toward the recommended density.");
+                } else {
+                    lines << QStringLiteral("Suggestion:Keep the current mesh.");
+                }
+                details << QStringLiteral("Worst sample (1-based):%1\nWorst sample time:%2 s")
+                               .arg(static_cast<qulonglong>(a.worstSampleIndex + 1))
+                               .arg(a.worstTimeSeconds, 0, 'f', 6)
+                        << QStringLiteral("Center gaps / limited 2-D distribution:%1 / %2")
+                               .arg(static_cast<qulonglong>(a.centerGapPointCount))
+                               .arg(static_cast<qulonglong>(a.directionalGapPointCount));
+            }
+            details << QStringLiteral("Minimum / recommended vertices:%1 / %2")
+                           .arg(static_cast<qulonglong>(a.minimumVertexCount))
+                           .arg(static_cast<qulonglong>(a.recommendedVertexCount))
+                    << QStringLiteral("Core pattern threshold:%1% of peak")
+                           .arg(a.corePatternRatio * 100.0, 0, 'g', 4)
+                    << QStringLiteral("Counts use unique visible front-facing vertices only.")
+                    << QStringLiteral("Air moves and missed footprints are excluded from the percentages.")
+                    << QStringLiteral("Empirical sampling indicator; not an accuracy guarantee.");
+        }
+        if(a.gpuIntegrated) {
+            details << QStringLiteral("GPU fused counting; cost included in prediction GPU time.")
+                    << QStringLiteral("Assessment setup:%1 ms").arg(a.preparationMilliseconds, 0, 'f', 1)
+                    << QStringLiteral("Zero-count GPU checks:%1 ms").arg(a.probeMilliseconds, 0, 'f', 1)
+                    << QStringLiteral("Compact record readback:%1 ms").arg(a.readbackMilliseconds, 0, 'f', 1)
+                    << QStringLiteral("CPU summary:%1 ms").arg(a.elapsedMilliseconds, 0, 'f', 1);
+        }
+        m_meshSamplingReadout->setStyleSheet(QStringLiteral(
+            "font-family: Consolas, monospace; color: %1;").arg(QString::fromLatin1(color)));
+        m_meshSamplingReadout->setProperty("sourceToolTip", details.join(QStringLiteral("\n")));
+        setReadout(m_meshSamplingReadout, lines.join(QStringLiteral("\n")));
     }
 }

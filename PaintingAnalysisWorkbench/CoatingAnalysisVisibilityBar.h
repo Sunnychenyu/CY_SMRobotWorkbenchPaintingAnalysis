@@ -5,6 +5,8 @@
 #include <QWidget>
 
 class QCheckBox;
+class QLabel;
+class QPushButton;
 
 namespace robot_qt_viewer
 {
@@ -26,6 +28,7 @@ namespace robot_qt_viewer
         void showSprayPointsChanged(bool enabled);
         void showThicknessChanged(bool enabled);
         void thicknessPickChanged(bool enabled);
+        void thicknessPickReportRequested();
 
     private:
         QCheckBox* m_showModel = nullptr;
@@ -33,6 +36,8 @@ namespace robot_qt_viewer
         QCheckBox* m_showSprayPoints = nullptr;
         QCheckBox* m_showThickness = nullptr;
         QCheckBox* m_thicknessPick = nullptr;
+        QPushButton* m_exportThicknessPickReport = nullptr;
+        QLabel* m_thicknessPickReportLink = nullptr;
         QString m_languageCode{ QStringLiteral("en") };
     };
 }

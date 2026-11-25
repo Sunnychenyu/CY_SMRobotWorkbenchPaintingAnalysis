@@ -1,6 +1,7 @@
 #pragma once
 
 #include "PaintingAnalysisMeshAdapter.h"
+#include "DynamicSurfacePanel.h"
 #include "ThicknessUniformityAnalysis.h"
 
 #include <SprayThicknessPrediction/AlgorithmReproduction.h>
@@ -52,11 +53,14 @@ namespace robot_qt_viewer
 
     struct CoatingAnalysisSession
     {
+        spraythickness::PaperGaussianParameters depositionParameters;
+        spraythickness::PaperGaussianParameters resultDepositionParameters;
         QString objectId;
         QString modelName;
         QString sourcePath;
         QString trajectoryName;
         QString trajectoryPath;
+        QString localCorrectionStatus;
         CoatingAnalysisModelInfo modelInfo;
         CoatingAnalysisTrajectoryInfo trajectoryInfo;
         spraytrajectory::SprayTrajectory trajectory;
@@ -72,10 +76,19 @@ namespace robot_qt_viewer
         bool trajectorySamplingApplied = false;
         PaintingAnalysisMeshBinding binding;
         std::shared_ptr<assetcore::ModelDesc> predictionDisplayModel;
+        // Keep report geometry independent of dynamic surface view and coloring.
+        std::shared_ptr<assetcore::ModelDesc> thicknessReportModel;
         spraythickness::ThicknessPredictionResult prediction;
+        std::shared_ptr<const spraythickness::DynamicSurfaceSnapshot> dynamicPreview;
+        Eigen::Isometry3d dynamicWorldFromModel = Eigen::Isometry3d::Identity();
+        spraythickness::AdvancedThicknessPredictionOptions dynamicResultOptions;
+        spraycore::SprayTool dynamicResultTool;
+        spraycore::SprayProcess dynamicResultProcess;
+        DynamicSurfaceDisplay dynamicDisplay;
         spraythickness::AlgorithmReproductionResult reproduction;
         smrobot::visualization::SurfaceScalarOverlay overlay;
         smrobot::visualization::SurfaceScalarOverlay thicknessOverlay;
+        std::vector<std::uint8_t> relativeErrorComparisonMask;
         double predictionElapsedSeconds = 0.0;
         bool hasResult = false;
         bool hasReproductionResult = false;
@@ -107,6 +120,10 @@ namespace robot_qt_viewer
         {
             binding.sampleIndicesBySubMesh.clear();
             predictionDisplayModel.reset();
+            thicknessReportModel.reset();
+            dynamicPreview.reset();
+            relativeErrorComparisonMask.clear();
+            localCorrectionStatus.clear();
             prediction = spraythickness::ThicknessPredictionResult();
             reproduction = spraythickness::AlgorithmReproductionResult();
             overlay = smrobot::visualization::SurfaceScalarOverlay();

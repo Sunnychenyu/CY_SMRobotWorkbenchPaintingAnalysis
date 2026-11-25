@@ -4,6 +4,12 @@ set(TARGET_NAME PaintingAnalysisWorkbench)
 set(CMAKE_AUTOMOC ON)
 
 set(SOURCES
+    LocalDepositionCorrectionAdapter.cpp
+    LocalDepositionCorrectionAdapter.h
+    DynamicSurfacePanel.cpp
+    DynamicSurfacePanel.h
+    DynamicSurfaceDisplayAdapter.cpp
+    DynamicSurfaceDisplayAdapter.h
     AlgorithmReproductionJobController.cpp
     AlgorithmReproductionJobController.h
     CoatingAnalysisLanguage.cpp
@@ -40,12 +46,22 @@ set(SOURCES
     PublishedReproductionAdapter.h
     PublishedReproductionDisplayAdapter.cpp
     PublishedReproductionDisplayAdapter.h
+    ThicknessPickReport.cpp
+    ThicknessPickReport.h
+    ThicknessSectionSchematic.cpp
+    ThicknessSectionSchematic.h
+    ThicknessPickSampling.cpp
+    ThicknessPickSampling.h
+    ThicknessPickSectionDialog.cpp
+    ThicknessPickSectionDialog.h
     ThicknessPredictionJobController.cpp
     ThicknessPredictionJobController.h
     OnlineThicknessPredictionJobController.cpp
     OnlineThicknessPredictionJobController.h
     OnlinePredictionDiagnostics.cpp
     OnlinePredictionDiagnostics.h
+    OnlineSceneMotion.cpp
+    OnlineSceneMotion.h
     OnlineVirtualMotion.cpp
     ThicknessUniformityAnalysis.cpp
     ThicknessUniformityAnalysis.h
@@ -78,6 +94,7 @@ target_link_libraries(${TARGET_NAME}
         SMRobotPlatform::SimulationProject
         SMRobotSpray::SprayThicknessPredictionOpenGL
         SMRobotSpray::RotationBodyTrajectoryOptimization
+        SMRobotMotionPlanning::MotionPlanningCore
         nlohmann_json::nlohmann_json
 )
 
@@ -97,16 +114,19 @@ set_target_properties(${TARGET_NAME} PROPERTIES
 )
 
 if(BuildTests)
-    add_subdirectory(
+    rs2026_add_test_unit(
+        regression/ThicknessPickReportTest
+        ${PROJECT_BINARY_DIR}/tests/thickness_pick_report)
+    rs2026_add_test_unit(
         regression/PaintingAnalysisMeshAdapterTest
         ${PROJECT_BINARY_DIR}/tests/painting_analysis_mesh_adapter)
-    add_subdirectory(
+    rs2026_add_test_unit(
         regression/ThicknessUniformityAnalysisTest
         ${PROJECT_BINARY_DIR}/tests/thickness_uniformity_analysis)
-    add_subdirectory(
+    rs2026_add_test_unit(
         regression/OnlineVirtualMotionTest
         ${PROJECT_BINARY_DIR}/tests/online_virtual_motion)
-    add_subdirectory(
+    rs2026_add_test_unit(
         regression/OnlinePredictionStreamingTest
         ${PROJECT_BINARY_DIR}/tests/online_prediction_streaming)
 endif()

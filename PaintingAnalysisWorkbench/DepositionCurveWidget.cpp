@@ -12,21 +12,21 @@ namespace robot_qt_viewer
 {
     namespace
     {
-        double paperGaussianHalfWidthMeters()
+        double paperGaussianHalfWidthMeters(const spraythickness::PaperGaussianParameters& parameters)
         {
-            const spraythickness::PaperGaussianParameters parameters;
             const double lateralSigma =
                 parameters.referenceDistanceMeters * std::tan(parameters.sigmaPhiRadians);
             return lateralSigma * 2.5;
         }
 
-        double paperGaussianValue(double lateralMeters)
+        double paperGaussianValue(double lateralMeters,const spraythickness::PaperGaussianParameters& parameters)
         {
-            const spraythickness::PaperGaussianParameters parameters;
             const double phi = std::atan(
                 lateralMeters / std::max(parameters.referenceDistanceMeters, 1.0e-9));
-            const double sigma = std::max(parameters.sigmaPhiRadians, 1.0e-9);
-            return std::exp(-0.5 * (phi / sigma) * (phi / sigma));
+            const double peak=parameters.amplitudeMillimeters/std::max(parameters.referenceExposureSeconds,1e-9);
+            if(peak<=0)return 0;
+            return spraythickness::paperGaussianRateMillimeters(parameters,
+                parameters.referenceDistanceMeters*1000,parameters.referenceAngleDegrees,phi,0)/peak;
         }
     }
 
@@ -39,8 +39,14 @@ namespace robot_qt_viewer
     void DepositionCurveWidget::showPaperGaussian()
     {
         m_usePaperGaussian = true;
-        m_halfWidth = std::max(paperGaussianHalfWidthMeters(), 1.0e-4);
+        m_halfWidth = std::max(paperGaussianHalfWidthMeters(m_parameters), 1.0e-4);
         update();
+    }
+
+    void DepositionCurveWidget::setParameters(const spraythickness::PaperGaussianParameters& p)
+    {
+        if(spraythickness::samePaperGaussianParameters(m_parameters,p))return;
+        m_parameters=p;if(m_usePaperGaussian)showPaperGaussian();
     }
 
     void DepositionCurveWidget::showSprayPattern(const spraycore::SprayPattern& pattern)
@@ -64,7 +70,7 @@ namespace robot_qt_viewer
     double DepositionCurveWidget::evaluate(double lateralMeters) const
     {
         if(m_usePaperGaussian) {
-            return paperGaussianValue(lateralMeters);
+            return paperGaussianValue(lateralMeters,m_parameters);
         }
         return m_pattern.evaluate(lateralMeters);
     }

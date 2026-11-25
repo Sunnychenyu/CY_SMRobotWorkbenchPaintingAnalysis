@@ -16,9 +16,23 @@ namespace robot_qt_viewer
         QString name;
     };
 
+    struct OnlinePositionerAxis
+    {
+        QString robotId, jointName, label;
+    };
+    struct OnlineTcpItem
+    {
+        QString attachmentId;
+        QString frameId;
+        QString label;
+    };
+
     struct CoatingAnalysisViewModel
     {
         QVector<CoatingAnalysisWorkpieceItem> workpieces;
+        QVector<OnlineTcpItem> onlineTcps;
+        QVector<OnlinePositionerAxis> onlinePositionerAxes;
+        bool onlineBindingConfirmed = false;
         QString selectedWorkpieceId;
         QString modelName = QStringLiteral("No model loaded");
         QString modelPath;
@@ -97,6 +111,7 @@ namespace robot_qt_viewer
         double predictionElapsedSeconds = 0.0;
         spraythickness::ThicknessMetrics thicknessMetrics;
         spraythickness::ThicknessPredictionTiming predictionTiming;
+        std::shared_ptr<const spraythickness::MeshSamplingAssessment> meshSamplingAssessment;
         bool reproductionTimingValid = false;
         bool reproductionFramePending = false;
         bool reproductionConversionApplicable = false;
@@ -125,6 +140,8 @@ namespace robot_qt_viewer
 
     struct CoatingAnalysisVisibilityView
     {
+        bool canExportThicknessPickReport = false;
+        QString thicknessPickReportPath;
         bool hasModel = false;
         bool hasTrajectory = false;
         bool hasThickness = false;
@@ -140,6 +157,9 @@ namespace robot_qt_viewer
         QString trajectoryName;
         CoatingAnalysisTrajectoryInfo trajectoryInfo;
         QVector<CoatingAnalysisWorkpieceItem> workpieces;
+        QVector<OnlineTcpItem> onlineTcps;
+        QVector<OnlinePositionerAxis> onlinePositionerAxes;
+        bool onlineBindingConfirmed = false;
         QString selectedWorkpieceId;
         bool showModel = true;
         bool hasThickness = false;

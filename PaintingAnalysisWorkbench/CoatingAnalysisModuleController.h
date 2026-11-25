@@ -7,8 +7,11 @@
 #include "OnlinePredictionDiagnostics.h"
 
 #include <QHash>
+#include <QMap>
+#include <QVector>
 #include <QObject>
 #include <QPoint>
+#include <QPointer>
 #include <QString>
 #include <QStringList>
 
@@ -17,6 +20,7 @@
 #include <cstdint>
 #include <chrono>
 #include <memory>
+#include <optional>
 #include <vector>
 
 class QMenu;
@@ -30,7 +34,9 @@ namespace spraytrajectory
 
 namespace robot_qt_viewer
 {
+    class OnlineSceneMotion;
     class CoatingAnalysisPanel;
+    class DynamicSurfaceHeader;
     class CoatingAnalysisTreePanel;
     class CoatingAnalysisInfoPanel;
     class CoatingAnalysisVisibilityBar;
@@ -57,6 +63,7 @@ namespace robot_qt_viewer
             QObject* parent = nullptr);
         ~CoatingAnalysisModuleController() override;
 
+        void attachDynamicSurfaceHeader(QWidget* viewport);
         void activate();
         void deactivate();
         void setLanguageCode(const QString& languageCode);
@@ -85,6 +92,12 @@ namespace robot_qt_viewer
         const spraytrajectory::SprayPathPoint& waypointAt(std::size_t index) const;
         double waypointDurationAt(std::size_t index) const;
 
+        bool beginDepositionDiameterMeasurement(const spraythickness::PaperGaussianParameters& expectedModel);
+        void clearDepositionDiameterMeasurement();
+        void applyDepositionCalibration(const spraythickness::PaperGaussianParameters& parameters,int target);
+        void setDepositionModels(const QMap<QString,QString>& models);
+        void setLocalCorrectionOptions(const spraythickness::LocalDepositionCorrectionOptions& options);
+
     public slots:
         void handleViewportFrameSwapped();
         void handleOnlineFramePresented(quint64 frameId, bool displayed);
@@ -97,6 +110,9 @@ namespace robot_qt_viewer
         void resetThicknessDisplayRange();
 
     signals:
+        void surfaceQuantityChanged(const QString& quantity);
+        void depositionModelSelectionRequested(const QString& modelId,int target);
+        void depositionDiametersMeasured(const QVector<double>& baselinesMm,const QVector<double>& incrementsUm);
         void statusMessageRequested(const QString& message, int timeoutMs);
         void thicknessToolTipRequested(
             const QString& text,
@@ -113,6 +129,13 @@ namespace robot_qt_viewer
         struct AxisymmetricProfileState;
         struct PendingOnlineDisplay;
         bool loadModel(const QString& path, double scaleToMeters);
+        void loadLocalCorrectionOptions();
+        void saveLocalCorrectionOptions(const spraythickness::LocalDepositionCorrectionOptions& options);
+        void editLocalCorrectionParameters();
+        void invalidateLocalCorrectionResults();
+        void configureLocalCorrection(spraythickness::AdvancedThicknessPredictionOptions& options,
+            const QString& objectId,
+            const Eigen::Isometry3d& predictionFromWorld = Eigen::Isometry3d::Identity());
         void openModelFromDialog();
         bool loadTrajectory(const QString& path);
         void openTrajectoryFromDialog();
@@ -126,6 +149,7 @@ namespace robot_qt_viewer
             std::size_t trajectoryCount,
             bool reportFailure);
         void loadSavedTrajectoryPlanIfAvailable(bool refreshSavedTrajectory = false);
+        void refreshSavedTrajectoryPlacement();
         bool usesSavedTrajectoryPlan() const;
         bool usesOptimizationBaselineTrajectory() const;
         bool usesOptimizedTrajectory() const;
@@ -140,7 +164,15 @@ namespace robot_qt_viewer
         void applyTrajectorySampling();
         void predictThickness();
         void startOnlineSpray();
+        void startOnlineSceneMotion(bool trajectory);
+        void stopOnlineSceneMotion();
         bool prepareOnlineSession();
+        void loadOnlineScene();
+        void confirmOnlineBinding();
+        bool readOnlineScenePoses(Eigen::Isometry3d& gun, Eigen::Isometry3d& target,
+            QString& robotId) const;
+        QString onlineTargetRobotId() const;
+        QString onlineLiveInputError(const QString& tcpRobotId) const;
         void setOnlineVirtualMotion(bool gunMovement, bool running);
         void applyOnlineMotionParameters();
         void applyOnlineToolDirections();
@@ -173,6 +205,9 @@ namespace robot_qt_viewer
         void previewLocalInputs();
         void selectAxisymmetricProfileRegion();
         void cancelPrediction();
+        bool applyDynamicSurfaceView(QString* error = nullptr);
+        void saveDynamicSurfaceResult(bool ply);
+        QPointer<DynamicSurfaceHeader> m_dynamicHeader;
         void handlePredictionProgress(double progress, const QString& message);
         void handlePredictionFinished(const spraythickness::ThicknessPredictionResult& prediction);
         void handlePredictionFailed(const QString& message);
@@ -181,6 +216,7 @@ namespace robot_qt_viewer
         void setShowSprayPoints(bool enabled);
         void setShowThickness(bool enabled);
         void setThicknessPickEnabled(bool enabled);
+        void exportPickedThicknessReport();
         void setLocalDebugVisibility(
             bool cylindricalSurface,
             bool rotationAxis,
@@ -268,14 +304,24 @@ namespace robot_qt_viewer
         void handleTrajectoryDeleteRequested();
         void handleThicknessClearRequested();
 
+        bool m_measuringDiameters=false;
+        QString m_diameterObjectId;
+        sprayworkpiece::WorkpieceModel m_diameterWorkpiece;
+        std::vector<Eigen::Vector3d> m_diameterBasePoints,m_diameterCoatedPoints;
+        QVector<double> m_diameterBaselinesMm,m_diameterIncrementsUm;
+        bool collectDiameterPoint(const QString& objectId,std::uint32_t triangleIndex,const Eigen::Vector3d& hit);
         CoatingAnalysisPanel& m_panel;
         CoatingAnalysisTreePanel& m_treePanel;
         CoatingAnalysisInfoPanel& m_infoPanel;
         CoatingAnalysisVisibilityBar& m_visibilityBar;
         RobotQtViewerDocumentContext& m_context;
         CoatingAnalysisSession m_session;
+        spraythickness::LocalDepositionCorrectionOptions m_localCorrectionOptions;
+        QString m_localCorrectionConfigurationError;
+        std::optional<Eigen::Isometry3d> m_loadedTrajectoryWorldFromMesh;
         std::unique_ptr<ThicknessPredictionJobController> m_predictionJob;
         std::unique_ptr<OnlineThicknessPredictionJobController> m_onlineJob;
+        std::unique_ptr<OnlineSceneMotion> m_onlineSceneMotion;
         bool m_onlineBackendReady = false;
         bool m_onlineStartAfterPreparation = false;
         bool m_onlineVirtualBatchPending = false;
@@ -288,6 +334,7 @@ namespace robot_qt_viewer
         std::unique_ptr<AlgorithmReproductionJobController> m_reproductionJob;
         QString m_status = QStringLiteral("Load a model and trajectory to begin.");
         QString m_predictionObjectId;
+        QString m_lastThicknessPickReportPath;
         double m_predictionProgress = 0.0;
         bool m_active = false;
         bool m_hasCurrentThickness = false;
@@ -296,6 +343,7 @@ namespace robot_qt_viewer
         Eigen::Vector3d m_rotationAxisOrigin = Eigen::Vector3d::Zero();
         Eigen::Vector3d m_rotationAxisDirection = Eigen::Vector3d::UnitZ();
         sprayworkpiece::WorkpieceModel m_rotationPreviewWorkpiece;
+        Eigen::Isometry3d m_rotationPreviewWorldFromMesh = Eigen::Isometry3d::Identity();
         std::vector<std::size_t> m_rotationSurfaceTriangleIndices;
         std::size_t m_rotationSeedTriangleIndex = 0;
         double m_rotationFitElapsedMilliseconds = 0.0;
@@ -446,6 +494,10 @@ namespace robot_qt_viewer
         bool m_onlineVirtualSource = false;
         bool m_onlineVirtualRotating = false;
         bool m_onlineVirtualMovingGun = false;
+        bool m_onlineBindingConfirmed = false;
+        QString m_onlineTcpAttachmentId;
+        QString m_onlineTcpFrameId;
+        QString m_onlineTargetId;
         QString m_liveGunRobotId;
         QString m_liveTableRobotId;
         QString m_onlineGunRobotId;
